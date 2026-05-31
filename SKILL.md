@@ -196,6 +196,44 @@ node cli.js post 7629735841874726179 "说得对" --reply-to 7646065507817734949
 
 > **注意**：评论内容中的引号会被自动转义。`status_code=8` 通常表示内容过短、重复或被风控拦截，换内容重试。
 
+### LLM 分析
+
+```bash
+node cli.js analyze <aweme_id>
+```
+
+调用 LLM 批量分析评论，返回情感/分类/优先级。需配置 `config.json` 中的 `llm.api_key`。
+
+输出：
+```json
+[{
+  "cid": "7646...",
+  "sentiment": "positive",
+  "category": "question",
+  "priority": 5,
+  "summary": "询问滤镜位置"
+}]
+```
+
+### LLM 回复建议
+
+```bash
+node cli.js suggest <aweme_id>              # 仅建议
+node cli.js suggest <aweme_id> --auto       # 自动发布
+node cli.js suggest <aweme_id> --min-priority 4
+```
+
+结合分析结果和回复策略，生成回复建议。`--auto` 自动发布。
+
+### 运营仪表盘
+
+```bash
+node cli.js dashboard
+node cli.js dashboard --video <aweme_id> --days 14
+```
+
+生成本地自包含 HTML 仪表盘，含情感分布饼图、评论趋势折线图。生成后自动打开浏览器。
+
 ---
 
 ## 智能回复工作流
