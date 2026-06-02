@@ -176,8 +176,10 @@ window.__dy = {
     return await r.json();
   },
 
-  publish: async function(id,text,rid,rrid) {
-    var b = new URLSearchParams({aweme_id:id,text:text,item_type:'0',app_name:'aweme',enter_from:'others_homepage',previous_page:'others_homepage',comment_send_celltime:'3000',comment_video_celltime:'2000',one_level_comment_rank:'-1',paste_edit_method:'non_paste',text_extra:'[]'});
+  publish: async function(id,text,rid,rrid,mentions) {
+    // mentions: [{start,end,user_id,sec_uid}] for @ functionality
+    var extras = mentions ? JSON.stringify(mentions) : '[]';
+    var b = new URLSearchParams({aweme_id:id,text:text,item_type:'0',app_name:'aweme',enter_from:'others_homepage',previous_page:'others_homepage',comment_send_celltime:'3000',comment_video_celltime:'2000',one_level_comment_rank:'-1',paste_edit_method:'non_paste',text_extra:extras});
     if(rid){b.set('reply_id',rid);b.set('comment_id',rid)}
     if(rrid)b.set('reply_to_reply_id',rrid);
     var q = new URLSearchParams(Object.assign(this._q(), {app_name:'aweme',enter_from:'others_homepage',previous_page:'others_homepage',aweme_id:id,item_type:'0'}));
@@ -780,10 +782,19 @@ Douyin Comment CLI
       for (let i = 3; i < args.length; i++) {
         if (args[i] === '--reply-to') { replyIdRaw = args[++i]; replyId = `'${replyIdRaw}'`; }
       }
-      startOperation('post', { aweme_id: awemeId, text: content, reply_to: replyIdRaw });
+      // @ 提及支持
+      let atUid = null, atSecUid = null;
+      for (let i = 3; i < args.length; i++) {
+        if (args[i] === '--at') { atUid = args[++i]; atSecUid = args[++i]; }
+      }
+      const mentionsJs = atUid && atSecUid
+        ? `[{start:0,end:${atUid.length + 1},user_id:"${atUid}",sec_uid:"${atSecUid}",type:0}]`
+        : 'null';
+
+      startOperation('post', { aweme_id: awemeId, text: content, reply_to: replyIdRaw, at: atUid });
       const sc = content.replace(/'/g, "\\'");
       console.error(`Publishing: "${content}"`);
-      const res = await loggedSend('publish', { aweme_id: awemeId, text: content, reply_to: replyIdRaw }, `window.__dy.publish('${awemeId}', '${sc}', ${replyId})`, true);
+      const res = await loggedSend('publish', { aweme_id: awemeId, text: content, reply_to: replyIdRaw, at: atUid }, `window.__dy.publish('${awemeId}', '${sc}', ${replyId}, null, ${mentionsJs})`, true);
       if (!res.ok) throw new Error(res.error);
       const rv = res.value || {};
       if (rawMode) {
