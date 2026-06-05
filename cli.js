@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // cli.js — 抖音评论 CLI（Bridge Framework 版）
 //
-// 依赖 Bridge Server (D:\projects\tools\socketServers\server.js) 运行中，
+// 依赖 Bridge Server (server.js) 运行中，
 // 且浏览器已安装油猴脚本 scripts/douyin.user.js 并打开 douyin.com 页面。
 
 const http = require('http');
@@ -262,14 +262,24 @@ async function cmdPost(args) {
   if (!awemeId || !text) throw new Error('aweme_id and text required');
   const replyTo = getFlag(args, '--reply-to', null);
   const rrid = getFlag(args, '--reply-to-reply', null);
-  const atUid = getFlag(args, '--at', null);
-  const atSecUid = getFlag(args, '--at-sec-uid', null);
+  // @ 提及支持: --at <uid> <sec_uid>
+  let atUid = null, atSecUid = null;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--at') { atUid = args[++i]; atSecUid = args[++i]; }
+  }
 
   let mentions = 'null';
   if (atUid && atSecUid) {
     const atPos = text.indexOf('@');
-    const start = atPos >= 0 ? atPos : 0;
-    mentions = JSON.stringify([{ start, end: start + atSecUid.length + 1, user_id: atUid, sec_uid: atSecUid }]);
+    if (atPos >= 0) {
+      // 找到 @ 后面昵称的结束位置（空格或文本结束）
+      let charEnd = atPos + 1;
+      while (charEnd < text.length && text[charEnd] !== ' ') charEnd++;
+      // text_extra 的 start/end 是 UTF-8 字节位置
+      const byteStart = Buffer.byteLength(text.substring(0, atPos), 'utf8');
+      const byteEnd = Buffer.byteLength(text.substring(0, charEnd), 'utf8');
+      mentions = JSON.stringify([{ start: byteStart, end: byteEnd, user_id: atUid, sec_uid: atSecUid, type: 0 }]);
+    }
   }
 
   audit.startOperation('post', { aweme_id: awemeId, text, reply_to: replyTo });
@@ -319,7 +329,10 @@ async function cmdAnalyze(args) {
 
   console.error(`Analyzing ${commentsData.length} comments...`);
   const client = new llm.LLMClient(config.llm || {});
-  const results = await client.analyze(commentsData);
+  const results = await client.analyzeComments(commentsData);
+  if (!results || results.length === 0) {
+    console.error('Warning: LLM returned no analysis results');
+  }
 
   const ts = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
   const fp = path.join(__dirname, 'logs', 'results', `analyze-${awemeId}-${ts}.json`);
@@ -468,6 +481,7 @@ Douyin Comment CLI (Bridge Framework)
   node cli.js my                              我的作品
   node cli.js post <aweme_id> "内容"           发表评论
   node cli.js post <aweme_id> "回复" --reply-to <cid>
+  node cli.js post <aweme_id> "@1179139456380456 内容" --reply-to <cid> --at <uid> <sec_uid>
   node cli.js analyze <aweme_id>              LLM 分析（情感/分类/优先级）
   node cli.js suggest <aweme_id>              LLM 回复建议（--auto 自动发布）
   node cli.js dashboard                       仪表盘 HTML
@@ -478,8 +492,8 @@ Douyin Comment CLI (Bridge Framework)
   通用选项： --raw（原始输出） --no-log（本次不记录日志）
 
   前置条件：
-  1. Bridge Server 运行中: node D:\\projects\\tools\\socketServers\\server.js
-  2. 浏览器已安装油猴脚本 D:\\projects\\tools\\socketServers\\scripts\\douyin.user.js
+  1. Bridge Server 运行中: node server.js
+  2. 浏览器已安装油猴脚本 scripts/douyin.user.js
   3. 浏览器已打开 douyin.com 任意页面
 `);
 }

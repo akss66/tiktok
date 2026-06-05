@@ -8,7 +8,7 @@
 
 ```bash
 # 1. 启动 Bridge Server
-cd D:\projects\tools\socketServers
+cd D:\projects\skills\douyin
 npm install
 node server.js
 
@@ -114,7 +114,7 @@ LLM key 也可用环境变量 `OPENAI_API_KEY`。
 ## 前置条件
 
 ```
-1. Bridge Server 运行 → node D:\projects\tools\socketServers\server.js
+1. Bridge Server 运行 → node server.js（本目录）
 2. Tampermonkey + douyin.user.js 油猴脚本
 3. 浏览器打开 douyin.com 任意页面并登录
 ```
@@ -128,6 +128,6 @@ LLM key 也可用环境变量 `OPENAI_API_KEY`。
 ## 依赖
 
 - Node.js 18+
-- `ws` — 仅 Bridge Server（`socketServers` 目录）
+- `ws` — Bridge Server 依赖（`npm install` 安装）
 - Chrome + Tampermonkey 扩展
 - （可选）OpenAI API key — `analyze` / `suggest` 命令

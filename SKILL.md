@@ -7,7 +7,7 @@ description: 抖音评论 CLI — 作品列表 / 搜索视频 / 获取评论(含
 
 ## 前置条件
 
-- **Bridge Server 运行中**：`node D:\projects\tools\socketServers\server.js`
+- **Bridge Server 运行中**：`node server.js`（本目录）
 - 浏览器已安装 Tampermonkey + `scripts/douyin.user.js` 油猴脚本
 - 浏览器已打开 `douyin.com` 任意页面并**登录抖音**
 - 零依赖：无需 `npm install`
@@ -27,14 +27,14 @@ description: 抖音评论 CLI — 作品列表 / 搜索视频 / 获取评论(含
 
 启动方式：
 ```bash
-node D:\projects\tools\socketServers\server.js
+node server.js
 ```
 
 用 `run_background` 运行，等待输出 `[server] Bridge Server ready — http://127.0.0.1:19422`。
 
 验证可用：
 ```bash
-node D:\projects\tools\socketServers\cli.js status
+curl http://127.0.0.1:19422/api/status
 # 应显示 douyin.com 连接在线
 ```
 
@@ -299,7 +299,7 @@ node cli.js post <aweme_id> "真诚评论内容..."
 
 | 症状 | 原因 | 解法 |
 |------|------|------|
-| `Bridge Server not running` | Bridge Server 未启动 | 启动 `node D:\projects\tools\socketServers\server.js` |
+| `Bridge Server not running` | Bridge Server 未启动 | 启动 `node server.js` |
 | `No connection for site 'douyin.com'` | 浏览器未打开抖音页面或油猴脚本未安装 | 检查 Tampermonkey 是否启用 + 打开 douyin.com |
 | `status_code=8` | 评论被拦截 | 换内容重试（更长/更自然） |
 | 搜索结果为空 `[]` | 油猴脚本 bridge 未加载 | 刷新 douyin.com 页面，等待脚本自动重连 |
