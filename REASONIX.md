@@ -31,7 +31,7 @@ CLI 不再管理 daemon 生命周期。Bridge Server 独立启动，油猴脚本
 | 命令 | 用途 |
 |------|------|
 | `node cli.js search <kw> [--offset N] [--count N]` | 搜索视频 |
-| `node cli.js get <id> [--pages N\|--all] [--depth N] [--new] [--since <ts>]` | 获取评论 |
+| `node cli.js get <id> [--pages N\|--all] [--depth N] [--count N] [--reply-limit N] [--new] [--since <ts>]` | 获取评论 |
 | `node cli.js replies <cid> <aweme_id>` | 获取回复列表 |
 | `node cli.js my [--count N]` | 我的作品 |
 | `node cli.js post <id> "<text>" [--reply-to <cid>] [--at <uid> --at-sec-uid <sec>]` | 发表评论 |
@@ -49,6 +49,8 @@ CLI 不再管理 daemon 生命周期。Bridge Server 独立启动，油猴脚本
 ## Watch out for
 - **Bridge Server 必须先启动** — 否则所有命令报 `Bridge Server not running`
 - **site key 为 `douyin.com`** — 与油猴脚本中的 `CONFIG.site` 一致
-- **表达式必须带 `window.` 前缀** — 如 `window.__bridge.search(...)`（Function 构造器在全局作用域执行）
+- **表达式必须带 `window.` 前缀** — 如 `window.__bridge.search(...)`（间接 eval 在全局作用域执行）
 - **`status_code=8`** — 评论被风控拦截，换内容重试
+- **回复评论有延迟** — 发布后可能 1-2 分钟才在 replies 中出现（comment.status 从 7 变为 1）
+- **贴纸评论无法回复** — 纯贴纸/sticker 评论不支持文字回复
 - **零 npm 依赖** — 安装后无需 `npm install`
