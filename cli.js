@@ -479,7 +479,7 @@ Douyin Comment CLI (Bridge Framework)
 
   前置条件：
   1. Bridge Server 运行中: node D:\\projects\\tools\\socketServers\\server.js
-  2. 浏览器已安装油猴脚本 scripts/douyin.user.js
+  2. 浏览器已安装油猴脚本 D:\\projects\\tools\\socketServers\\scripts\\douyin.user.js
   3. 浏览器已打开 douyin.com 任意页面
 `);
 }

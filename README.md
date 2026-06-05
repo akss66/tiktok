@@ -1,30 +1,23 @@
 # 🎵 Douyin Comment CLI v2.0
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Node.js](https://img.shields.io/badge/Node.js-18%2B-green.svg)](https://nodejs.org)
-[![Platform](https://img.shields.io/badge/Platform-Windows-blue.svg)]()
-[![Status](https://img.shields.io/badge/Status-Production%20Ready-brightgreen.svg)]()
-
-> **English** | Fully automated Douyin (TikTok China) comment management via Chrome DevTools Protocol.
-> Search videos, fetch all comments (with nested replies), auto-reply with AI, and generate dashboards — no API key required for core features.
-
-基于 Chrome DevTools Protocol 的抖音全自动评论管理工具。搜索视频、爬取全量评论（含嵌套回复）、AI 智能回复、运营仪表盘。
+基于 Bridge Framework（油猴 + HTTP 轮询）的抖音全自动评论管理工具。搜索视频、爬取全量评论（含嵌套回复）、AI 智能回复、运营仪表盘。
 
 **功能**：作品列表 / 搜索视频 / 获取评论（含嵌套回复） / 发表回复评论 / AI 智能分析 / 运营仪表盘
 
 ## 快速开始
 
 ```bash
-cd D:\projects\skills\douyin
+# 1. 启动 Bridge Server
+cd D:\projects\tools\socketServers
 npm install
+node server.js
 
-# 1. 启动 Chrome 调试模式（chrome://inspect/#remote-debugging 开关）
-# 2. 打开 douyin.com 并登录
-# 3. 启动 daemon
-node cli.js daemon
+# 2. 浏览器安装 Tampermonkey 扩展
+#    复制 scripts/douyin.user.js → Tampermonkey 新建脚本 → 粘贴保存
+# 3. 打开 douyin.com 任意页面并登录（控制台应显示 ✓ Registered）
 
 # 4. 开始使用
-node cli.js ping
+cd D:\projects\skills\douyin
 node cli.js my
 node cli.js search "关键词"
 node cli.js get <aweme_id> --all --depth 1
@@ -35,103 +28,106 @@ node cli.js post <aweme_id> "内容"
 
 | 命令 | 用途 | 示例 |
 |------|------|------|
-| `daemon` | 启动后台 CDP 守护进程 | `node cli.js daemon` |
-| `ping` | 探活 daemon | `node cli.js ping` |
-| `stop` | 停止 daemon | `node cli.js stop` |
 | `my` | 我的作品列表 | `node cli.js my --count 10` |
 | `search` | 搜索视频 | `node cli.js search "周杰伦" --offset 0` |
-| `get` | 获取评论 | `node cli.js get <id> --all --depth 1` |
-| `replies` | 单条评论的回复 | `node cli.js replies <cid> <aweme_id>` |
+| `get` | 获取评论（含嵌套回复） | `node cli.js get <id> --all --depth 1` |
+| `replies` | 单条评论的回复列表 | `node cli.js replies <cid> <aweme_id>` |
 | `post` | 发表/回复评论 | `node cli.js post <id> "内容" --reply-to <cid>` |
-| `analyze` | AI 分析评论 | `node cli.js analyze <id>` |
-| `suggest` | AI 回复建议 | `node cli.js suggest <id> --auto --min-priority 3` |
-| `dashboard` | 生成仪表盘 | `node cli.js dashboard --video <id>` |
-| `profile` | 用户画像 | `node cli.js profile <uid>` |
+| `analyze` | AI 分析评论情感/优先级 | `node cli.js analyze <id>` |
+| `suggest` | AI 回复建议（可自动发布） | `node cli.js suggest <id> --auto` |
+| `dashboard` | 运营仪表盘 HTML | `node cli.js dashboard --video <id>` |
+| `profile` | 用户交互历史 | `node cli.js profile <uid>` |
+| `log` | 操作日志 | `node cli.js log --tail 20 --failed` |
 
 ## 通用选项
 
 | 选项 | 作用 |
 |------|------|
-| `--raw` | 输出完整 API 原始 JSON |
-| `--pages N` | 翻页数（get 命令） |
-| `--all` | 获取全部评论（等价 `--pages 999`） |
-| `--depth 1` | 获取嵌套回复（get 命令） |
-| `--new` | 增量获取新评论（get 命令） |
-| `--since <unix_ts>` | 指定时间戳（get 命令） |
-| `--auto` | 自动发布（suggest 命令） |
-| `--min-priority N` | 最低优先级过滤（suggest 命令） |
-| `--reply-to <cid>` | 回复目标评论（post 命令） |
+| `--raw` | 输出完整响应（含元数据） |
+| `--no-log` | 本次不写入审计日志 |
+| `--all` | 获取全部评论 |
+| `--depth 1` | 展开嵌套回复 |
+| `--new` | 增量拉取（自上次 fetch 后的新评论） |
+| `--since <ts>` | 指定时间戳增量 |
+| `--pages N` | 翻页数 |
+| `--auto` | suggest 命令自动发布 |
+| `--min-priority N` | 最低回复优先级 |
+| `--reply-to <cid>` | 回复目标评论 |
 
 ## 架构
 
 ```
+┌──────────────────────────────────────────────────────────────┐
+│  CLI (douyin/cli.js)                                         │
+│  ── HTTP POST /api/call ──►                                  │
+│                              Bridge Server (:19422)           │
+│                                 ├─ Connection Registry        │
+│                                 ├─ Poll Queue / Waiters       │
+│                                 └─ Request → Response         │
+│                                     │                         │
+│  ── HTTP 长轮询 ◄─────────── 油猴脚本（GM_xmlhttpRequest）── │
+│     /api/poll  /api/result       ├─ sandbox: 通信             │
+│                                  └─ unsafeWindow: __bridge →  │
+│                                    页面 fetch/cookie/eval     │
+└──────────────────────────────────────────────────────────────┘
+```
+
+```
 douyin/
-├── cli.js                    # 入口（daemon + CLI 路由）
-├── config.json               # LLM + daemon 配置（可选）
+├── cli.js                    # CLI 入口（HTTP → Bridge Server）
+├── config.json               # Bridge + LLM 配置
 ├── lib/
-│   ├── daemon.js             # PID JSON 锁、重连、页面感知、心跳
-│   ├── cdp.js                # CDP WebSocket 客户端
-│   ├── llm.js                # OpenAI-compatible LLM 封装
-│   └── commands/             # 命令模块（待拆分）
-├── templates/
-│   └── dashboard.html        # 仪表盘 HTML 模板（Chart.js）
+│   ├── audit.js              # 审计日志（sessions → operations）
+│   ├── dashboard.js          # Chart.js 仪表盘 HTML 生成
+│   └── llm.js                # OpenAI-compatible LLM 封装
 ├── logs/
-│   ├── audit.json            # 审计日志
-│   └── results/              # 命令结果
-├── SKILL.md                  # Agent 技能文档
-├── REASONIX.md               # 项目参考文档
+│   ├── audit.json            # 操作审计
+│   └── results/              # 大结果 JSON 落地
 ├── reply-strategy.md         # 回复策略模板
-└── package.json
+├── SKILL.md                  # Agent 技能文档
+└── package.json              # 零外部依赖
 ```
 
 ## 配置
 
-复制 `config.json` 并按需修改：
+`config.json`：
 
 ```json
 {
+  "bridge": {
+    "host": "127.0.0.1",
+    "port": 19422
+  },
   "llm": {
     "api_key": "sk-...",
     "base_url": "https://api.openai.com/v1",
-    "model": "gpt-4o-mini"
-  },
-  "daemon": {
-    "port": 19422,
-    "heartbeat_interval": 60000,
-    "max_reconnect_attempts": 5,
-    "inactive_timeout": 1200000
+    "model": "gpt-4o-mini",
+    "max_tokens": 4096,
+    "timeout_ms": 60000,
+    "max_retries": 3
   }
 }
 ```
 
 LLM key 也可用环境变量 `OPENAI_API_KEY`。
 
-## Daemon 生命周期
+## 前置条件
 
 ```
-┌── session 开始 ──┐
-│ node cli.js daemon │  ← run_background
-│ 等待 Listening ... │
-├── 操作阶段 ────────┤
-│ ping 探活           │
-│ get / post / ...    │
-├── session 结束 ────┤
-│ node cli.js stop    │
-└────────────────────┘
+1. Bridge Server 运行 → node D:\projects\tools\socketServers\server.js
+2. Tampermonkey + douyin.user.js 油猴脚本
+3. 浏览器打开 douyin.com 任意页面并登录
 ```
 
-- 一个 session 只启动一次 daemon
-- 首次连接 Chrome 弹"允许调试"，点一次即可
-- 20 分钟无操作自动退出
-- PID JSON 锁防重复启动 + 僵尸检测
+> **无需 Chrome 调试模式 / CDP** — GM_xmlhttpRequest 绕过 Chrome PNA loopback 限制，`unsafeWindow.eval()` 注入页面上下文执行。
 
 ## 审计日志
 
-所有操作自动记录到 `logs/audit.json`，大结果落地为独立 JSON 文件。支持增量拉取（`--new`）。
+所有操作自动记录到 `logs/audit.json`。大结果（get/search/my）落地为独立 JSON 文件，便于增量拉取（`--new`）。
 
 ## 依赖
 
-- Node.js 18+（内置 WebSocket + fetch）
-- `ws` — CDP WebSocket 客户端
-- Chrome 浏览器（`chrome://inspect/#remote-debugging` 开关）
+- Node.js 18+
+- `ws` — 仅 Bridge Server（`socketServers` 目录）
+- Chrome + Tampermonkey 扩展
 - （可选）OpenAI API key — `analyze` / `suggest` 命令

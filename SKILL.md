@@ -1,6 +1,6 @@
 ---
 name: douyin-comment
-description: 抖音评论 CLI — 作品列表 / 搜索视频 / 获取评论(含嵌套回复) / 发表回复评论。Bridge Framework（油猴+WebSocket）方案。
+description: 抖音评论 CLI — 作品列表 / 搜索视频 / 获取评论(含嵌套回复) / 发表回复评论。Bridge Framework（油猴+HTTP轮询）方案。
 ---
 
 # 抖音评论 Skill
