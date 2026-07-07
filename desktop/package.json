@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "electron": "electron .",
-    "start": "concurrently \"npm run dev\" \"wait-on http://127.0.0.1:5173 && electron .\""
+    "start": "concurrently \"npm run dev\" \"wait-on http://127.0.0.1:5173 && electron .\"",
+    "test:profiles": "node electron/profile-smoke.js"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^4.3.4",

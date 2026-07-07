@@ -22,6 +22,20 @@
    npm run start
    ```
 
+## 验证
+
+运行后端、桌面壳和账号浏览器 Profile 的基础检查：
+
+```powershell
+# 仓库根目录
+.\.tools\node-v22.23.1-win-x64\npm.cmd test -- tests/desktop-db.test.js tests/desktop-api.test.js tests/desktop-task-runner.test.js
+
+# desktop 目录
+npm run test:profiles
+```
+
+`test:profiles` 会用 Electron 按同一个本地数据目录启动两次，验证账号 A 的浏览器分区能持久化 cookie，账号 B 的浏览器分区读不到账号 A 的 cookie。
+
 ## 使用流程
 
 1. 在账号页创建账号。
