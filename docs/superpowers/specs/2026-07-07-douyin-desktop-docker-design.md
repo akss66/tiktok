@@ -1,129 +1,134 @@
-# Douyin Desktop Docker Design
+# 抖音桌面端 Docker 版设计
 
-## Status
-Draft for user review
+## 状态
 
-## Date
+待用户 review
+
+## 日期
+
 2026-07-07
 
-## Context
-The current project is a Node.js CLI for Douyin operations. It runs as three separate pieces:
+## 背景
 
-- `cli.js` for command execution.
-- `server.js` as the local Bridge Server.
-- `scripts/douyin.user.js` installed in a logged-in browser page.
+当前项目是一个 Node.js 抖音运营 CLI 工具，运行时由三部分组成：
 
-The target product is a desktop application that can be shared with coworkers. Each coworker should run an independent local copy on their own Windows machine, with separate accounts, browser sessions, storage, and task history. The first version should resemble a matrix-operation management console: accounts, tasks, logs, settings, and dashboards.
+- `cli.js`：命令行入口。
+- `server.js`：本地 Bridge Server。
+- `scripts/douyin.user.js`：安装在已登录浏览器页面里的桥接脚本。
 
-The selected direction is:
+目标产品是一个可以交给同事使用的桌面应用。每个同事在自己的 Windows 电脑上独立安装和运行，账号、浏览器登录态、本地存储、任务记录互不共享。第一版产品形态参考矩阵运营后台：账号管理、任务管理、日志、配置和数据看板。
 
-**Electron desktop app + Docker backend + embedded Chromium browser tabs + local independent data per coworker.**
+已确认的方向：
 
-## Goals
+**Electron 桌面应用 + Docker 后端 + 应用内置 Chromium 浏览器标签页 + 每个同事本机独立数据。**
 
-- Provide a Windows desktop application that coworkers can install and use without touching the CLI.
-- Keep each coworker's data local to their machine.
-- Embed account browser tabs inside the desktop app.
-- Store each account's login state in an isolated browser profile.
-- Run backend services in Docker for consistent runtime behavior.
-- Reuse the existing Bridge Server and command modules where practical.
-- Replace manual Tampermonkey setup with application-managed script injection.
-- Provide a first useful console: account management, task management, logs, configuration, and basic dashboards.
+## 目标
 
-## Non-Goals
+- 提供一个 Windows 桌面应用，同事不需要接触命令行也能使用。
+- 每个同事的数据保存在自己的电脑上。
+- 在桌面应用中内置账号浏览器标签页。
+- 每个账号使用独立浏览器 Profile 保存登录态。
+- 后端服务运行在 Docker 中，减少不同电脑环境差异。
+- 尽量复用现有 Bridge Server 和命令模块。
+- 用应用自动注入桥接脚本，替代手动安装油猴脚本。
+- 第一版先做可用的运营控制台：账号管理、任务管理、日志、配置和基础看板。
 
-- No centralized team server in the first version.
-- No shared team database in the first version.
-- No drag-and-drop workflow editor in the first version.
-- No platform detection bypass, stealth fingerprint spoofing, canvas/WebGL/audio spoofing, or anti-detection evasion.
-- No automatic account registration.
+## 非目标
 
-The embedded browser may support ordinary configuration such as isolated profiles, proxy settings, user-agent selection, viewport size, and persistent sessions. These are treated as browser/session management features, not fingerprint evasion features.
+- 第一版不做中心化团队服务器。
+- 第一版不做团队共享数据库。
+- 第一版不做拖拽式工作流编辑器。
+- 不做平台风控绕过、隐身指纹伪装、Canvas/WebGL/Audio 指纹欺骗或反检测规避。
+- 不做自动注册账号。
 
-## Users
+内置浏览器可以支持常规配置，例如账号隔离 Profile、代理配置、User-Agent 选择、窗口尺寸和登录态持久化。这些属于浏览器会话管理能力，不属于指纹规避能力。
 
-### Operator
-Runs the desktop application on their own computer. Creates accounts, logs into Douyin inside embedded browser tabs, starts tasks, and reviews logs.
+## 用户角色
 
-### Maintainer
-Builds and distributes the installer and Docker image. Troubleshoots local runs through app logs and container logs.
+### 操作员
 
-## Recommended Architecture
+在自己的电脑上运行桌面应用。负责创建账号、在内置浏览器中登录抖音、启动任务并查看日志。
+
+### 维护者
+
+负责构建和分发安装包、Docker 镜像，排查同事本机的应用日志和容器日志。
+
+## 推荐架构
 
 ```text
-Windows workstation
-+-- Electron desktop app
-|   +-- React management UI
-|   +-- Account browser tabs
-|   +-- Electron main process
-|   |   +-- Docker lifecycle controller
-|   |   +-- Browser profile manager
-|   |   +-- IPC/API bridge
-|   +-- Local app data
+Windows 工作站
++-- Electron 桌面应用
+|   +-- React 管理界面
+|   +-- 账号浏览器标签页
+|   +-- Electron 主进程
+|   |   +-- Docker 生命周期控制器
+|   |   +-- 浏览器 Profile 管理器
+|   |   +-- IPC/API 桥接层
+|   +-- 本地应用数据
 |       +-- browser-profiles/
 |       +-- app-settings.json
 |       +-- logs/
-+-- Docker backend
-    +-- Node API service
++-- Docker 后端
+    +-- Node API 服务
     +-- Bridge Server
-    +-- Task runner
-    +-- SQLite database
-    +-- mounted data volume
+    +-- 任务执行器
+    +-- SQLite 数据库
+    +-- 挂载数据卷
 ```
 
-## Component Boundaries
+## 模块边界
 
-### Electron Main Process
+### Electron 主进程
 
-Responsibilities:
+职责：
 
-- Start, stop, and health-check the Docker backend.
-- Manage embedded browser tabs and per-account browser partitions/profiles.
-- Inject the Douyin bridge script into the account browser page.
-- Expose safe IPC methods to the React renderer.
-- Store local app settings outside the repo in the user's app data directory.
+- 启动、停止和健康检查 Docker 后端。
+- 管理内置浏览器标签页和每个账号的浏览器 Profile。
+- 在账号浏览器页面中注入抖音 Bridge 脚本。
+- 向 React 渲染进程暴露安全的 IPC 方法。
+- 将本地应用配置保存到用户应用数据目录，而不是仓库目录。
 
-It should not contain business logic for Douyin tasks. Task logic belongs in the backend so it can be tested and evolved independently.
+Electron 主进程不承载抖音任务业务逻辑。任务逻辑放在后端，便于测试和演进。
 
-### React Renderer
+### React 渲染进程
 
-Responsibilities:
+职责：
 
-- Account list and account detail pages.
-- Task creation, task list, and task detail pages.
-- Log viewer.
-- Settings UI.
-- Dashboard pages.
-- Embedded browser tab shell and navigation controls.
+- 账号列表和账号详情页。
+- 任务创建、任务列表和任务详情页。
+- 日志查看器。
+- 设置界面。
+- 数据看板。
+- 内置浏览器标签页外壳和导航控制。
 
-The UI should behave like an operations console, not a marketing website. It should prioritize dense, scannable tables, clear statuses, and predictable actions.
+界面应该像运营控制台，不做营销落地页。优先考虑高密度、易扫描的表格、清晰状态和可预期操作。
 
-### Docker Backend
+### Docker 后端
 
-Responsibilities:
+职责：
 
-- Provide local HTTP APIs for the desktop app.
-- Run the existing Bridge Server.
-- Run task execution and scheduling.
-- Persist operational data in SQLite.
-- Expose health/status endpoints.
+- 为桌面应用提供本地 HTTP API。
+- 运行现有 Bridge Server。
+- 运行任务执行和调度。
+- 使用 SQLite 持久化运营数据。
+- 暴露健康检查和状态接口。
 
-The backend should not own the embedded browser process. Browser UI remains in Electron for better local desktop experience.
+后端不负责交互式浏览器进程。浏览器 UI 保留在 Electron 中，以获得更好的本地桌面体验。
 
-### Embedded Browser
+### 内置浏览器
 
-Responsibilities:
+职责：
 
-- Let the operator log into Douyin inside the app.
-- Maintain one isolated browser profile per account.
-- Host the injected bridge script for account-bound operations.
-- Surface connection status back to the app.
+- 让操作员在应用内登录抖音。
+- 每个账号维护一个独立浏览器 Profile。
+- 承载注入后的 Bridge 脚本，执行账号绑定操作。
+- 将连接状态反馈给应用。
 
-Each account should map to a stable browser storage partition/profile. Closing the app must not delete login state.
+每个账号都映射到一个稳定的浏览器存储分区或 Profile。关闭应用不能删除登录态。
 
-## Data Model Draft
+## 数据模型草案
 
-### Account
+### Account 账号
 
 - `id`
 - `name`
@@ -136,7 +141,7 @@ Each account should map to a stable browser storage partition/profile. Closing t
 - `createdAt`
 - `updatedAt`
 
-### Task
+### Task 任务
 
 - `id`
 - `accountId`
@@ -150,16 +155,16 @@ Each account should map to a stable browser storage partition/profile. Closing t
 - `updatedAt`
 - `error`
 
-Initial task types:
+第一版任务类型：
 
-- Search videos by keyword.
-- Fetch comments for a video.
-- Generate reply suggestions.
-- Post approved replies.
-- Download video/audio.
-- Refresh account status.
+- 按关键词搜索视频。
+- 获取视频评论。
+- 生成回复建议。
+- 发布已确认回复。
+- 下载视频或音频。
+- 刷新账号状态。
 
-### Event Log
+### EventLog 事件日志
 
 - `id`
 - `accountId`
@@ -169,89 +174,89 @@ Initial task types:
 - `metadata`
 - `createdAt`
 
-## Data Flow
+## 数据流
 
-### Login
+### 登录流程
 
-1. Operator creates an account in the desktop UI.
-2. Electron allocates a browser profile for the account.
-3. Operator opens the embedded browser tab.
-4. Browser navigates to Douyin.
-5. Operator logs in manually.
-6. Electron injects the bridge script after the page is ready.
-7. Backend health/status shows the account bridge connection as online.
+1. 操作员在桌面界面创建账号。
+2. Electron 为该账号分配浏览器 Profile。
+3. 操作员打开该账号的内置浏览器标签页。
+4. 浏览器跳转到抖音。
+5. 操作员手动扫码或登录。
+6. 页面准备好后，Electron 注入 Bridge 脚本。
+7. 后端健康检查或状态接口显示该账号 Bridge 连接在线。
 
-### Task Execution
+### 任务执行流程
 
-1. Operator creates a task in the UI.
-2. React sends the task request to the local backend API.
-3. Backend stores the task in SQLite.
-4. Task runner executes the task.
-5. Task runner calls Bridge Server.
-6. Bridge Server communicates with the injected browser bridge for that account.
-7. Results and logs are persisted.
-8. UI updates task status and result summary.
+1. 操作员在界面中创建任务。
+2. React 将任务请求发送到本地后端 API。
+3. 后端将任务写入 SQLite。
+4. 任务执行器开始执行任务。
+5. 任务执行器调用 Bridge Server。
+6. Bridge Server 与该账号浏览器内的 Bridge 脚本通信。
+7. 结果和日志写入数据库。
+8. UI 更新任务状态和结果摘要。
 
-## Docker Strategy
+## Docker 策略
 
-First version should use Docker Compose with one backend service:
+第一版使用 Docker Compose，先只提供一个后端服务：
 
-- Node runtime pinned to a version compatible with `better-sqlite3`.
-- App source or built backend copied into the image.
-- Data volume mounted for SQLite, downloads, and logs.
-- Health endpoint exposed on localhost only.
+- Node 版本固定为兼容 `better-sqlite3` 的版本。
+- 将后端源码或构建产物复制进镜像。
+- 挂载数据卷，用于 SQLite、下载文件和日志。
+- 健康检查接口只暴露在本机 localhost。
 
-The desktop app should check for Docker availability on startup. If Docker is missing or not running, the app should show a clear setup screen instead of failing silently.
+桌面应用启动时检查 Docker 是否可用。如果 Docker 未安装或未运行，应用显示清晰的设置页面，而不是静默失败。
 
-## Distribution Strategy
+## 分发策略
 
-First version distribution:
+第一版分发方式：
 
-- Windows installer for the Electron app.
-- Docker image built from this repository.
-- Docker Compose file bundled or generated by the app.
+- Electron 桌面应用打包成 Windows 安装包。
+- Docker 镜像从当前仓库构建。
+- Docker Compose 文件随应用打包或由应用生成。
 
-Each coworker installs the desktop app locally. Their data remains on their machine.
+每个同事在本机安装应用并运行。账号数据、任务数据和浏览器登录态都保存在自己的电脑上。
 
-## Error Handling
+## 错误处理
 
-- Docker missing: show setup state with Docker installation guidance.
-- Docker backend unhealthy: show backend status and recent container logs.
-- Account browser offline: show account disconnected status and a reconnect action.
-- Douyin login expired: mark account as login required.
-- Bridge token mismatch: rotate/sync token through backend and reinject bridge script.
-- Task failure: persist error message and structured failure reason.
-- Port conflict: choose a free local port or show a resolvable conflict message.
+- Docker 未安装：显示设置状态和 Docker 安装指引。
+- Docker 后端不健康：显示后端状态和最近容器日志。
+- 账号浏览器离线：显示账号断开状态和重新连接操作。
+- 抖音登录态失效：将账号标记为需要重新登录。
+- Bridge token 不一致：通过后端轮换或同步 token，并重新注入 Bridge 脚本。
+- 任务失败：保存错误消息和结构化失败原因。
+- 端口冲突：自动选择可用本地端口，或显示可解决的冲突信息。
 
-## Testing Strategy
+## 测试策略
 
-- Unit tests for backend task creation, status transitions, and account persistence.
-- Integration tests for backend health and Bridge Server API.
-- Electron smoke test for app launch and settings loading.
-- Browser profile test proving two accounts use separate storage partitions.
-- Manual test for Douyin login because it depends on external site behavior.
+- 后端任务创建、状态流转和账号持久化单元测试。
+- 后端健康检查和 Bridge Server API 集成测试。
+- Electron 启动和设置加载冒烟测试。
+- 浏览器 Profile 测试，证明两个账号使用独立存储分区。
+- 抖音登录依赖外部网站行为，保留为人工验收测试。
 
-## First Milestone
+## 第一里程碑
 
-The first implementation milestone should deliver:
+第一阶段交付：
 
-- Electron app shell with React UI.
-- Docker backend health check.
-- Account CRUD.
-- Embedded browser tab per account.
-- Per-account browser profile persistence.
-- Bridge script injection from the app.
-- Task list with one working task type, preferably `my` or `search`.
-- Log viewer.
-- Windows development run instructions.
+- Electron 应用壳和 React 管理界面。
+- Docker 后端健康检查。
+- 账号增删改查。
+- 每个账号一个内置浏览器标签页。
+- 每个账号浏览器 Profile 持久化。
+- 应用自动注入 Bridge 脚本。
+- 任务列表，并先跑通一个任务类型，优先选择 `my` 或 `search`。
+- 日志查看器。
+- Windows 开发运行说明。
 
-## Open Decisions
+## 待决策项
 
-- Whether browser profiles should use Electron `partition` names or explicit `userData`-scoped directories.
-- Whether the backend API should be a new service or an extension of the existing `server.js`.
-- Whether Docker image distribution should be local build first or registry pull first.
-- Which UI framework to use for tables/forms, if any.
+- 浏览器 Profile 使用 Electron `partition`，还是使用显式的 `userData` 子目录。
+- 后端 API 做成新服务，还是扩展现有 `server.js`。
+- Docker 镜像分发先采用本地构建，还是直接从镜像仓库拉取。
+- 表格和表单是否引入 UI 组件库，以及选型。
 
-## Decision Summary
+## 决策摘要
 
-Use Electron for the desktop app because it provides Chromium embedding and Windows packaging in one stack. Use Docker only for backend services because putting the interactive browser inside Docker would require noVNC and would degrade the operator experience. Keep each coworker fully local in the first version to avoid central account/data governance before the product workflow is stable.
+使用 Electron 做桌面应用，因为它同时提供 Chromium 嵌入和 Windows 打包能力。Docker 只承载后端服务，因为把交互式浏览器放进 Docker 需要 noVNC，使用体验会下降。第一版保持每个同事完全本地独立，避免在产品工作流稳定前引入中心化账号和数据治理复杂度。
