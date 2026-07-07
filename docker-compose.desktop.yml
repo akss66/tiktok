@@ -5,6 +5,7 @@ services:
       dockerfile: Dockerfile.desktop-backend
     container_name: douyin-desktop-backend
     ports:
+      - "127.0.0.1:19422:19422"
       - "127.0.0.1:19522:19522"
     volumes:
       - douyin-desktop-data:/data
