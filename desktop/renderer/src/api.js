@@ -48,3 +48,11 @@ export async function startBackend() {
 export async function stopBackend() {
   return requireBridge().stopBackend();
 }
+
+export async function openAccountBrowser(account) {
+  return requireBridge().openAccountBrowser(account);
+}
+
+export async function closeAccountBrowser() {
+  return requireBridge().closeAccountBrowser();
+}

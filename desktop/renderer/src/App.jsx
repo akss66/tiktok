@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { closeAccountBrowser } from './api.js';
 import { AccountsPage } from './components/AccountsPage.jsx';
 import { SettingsPage } from './components/SettingsPage.jsx';
 
@@ -25,6 +26,17 @@ function PlaceholderPage({ title, description }) {
 
 export function App() {
   const [activePage, setActivePage] = useState('settings');
+  const [browserMessage, setBrowserMessage] = useState('');
+
+  async function handleCloseBrowser() {
+    setBrowserMessage('');
+    try {
+      await closeAccountBrowser();
+      setBrowserMessage('浏览器已关闭');
+    } catch (error) {
+      setBrowserMessage(error.message || '关闭浏览器失败');
+    }
+  }
 
   const page = {
     accounts: <AccountsPage />,
@@ -52,6 +64,10 @@ export function App() {
             </button>
           ))}
         </nav>
+        <div className="sidebar-actions">
+          <button type="button" onClick={handleCloseBrowser}>关闭浏览器</button>
+          {browserMessage ? <span>{browserMessage}</span> : null}
+        </div>
       </aside>
       <main className="workspace">{page}</main>
     </div>

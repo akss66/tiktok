@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { createAccount, deleteAccount, listAccounts, updateAccount } from '../api.js';
+import { createAccount, deleteAccount, listAccounts, openAccountBrowser, updateAccount } from '../api.js';
 
 const STATUS_OPTIONS = [
   { value: 'login_required', label: '需登录' },
@@ -72,6 +72,16 @@ export function AccountsPage() {
       setAccounts((items) => items.filter((item) => item.id !== account.id));
     } catch (err) {
       setError(err.message || '账号删除失败');
+    }
+  }
+
+  async function handleOpenBrowser(account) {
+    setError('');
+    try {
+      const result = await openAccountBrowser(account);
+      if (!result.ok) setError(result.error || '浏览器打开失败');
+    } catch (err) {
+      setError(err.message || '浏览器打开失败');
     }
   }
 
@@ -167,7 +177,10 @@ export function AccountsPage() {
                   />
                 </td>
                 <td>
-                  <button type="button" onClick={() => handleDelete(account)}>删除</button>
+                  <div className="button-row compact">
+                    <button type="button" onClick={() => handleOpenBrowser(account)}>打开浏览器</button>
+                    <button type="button" onClick={() => handleDelete(account)}>删除</button>
+                  </div>
                 </td>
               </tr>
             ))}

@@ -102,6 +102,14 @@ button:focus-visible {
   gap: 6px;
 }
 
+.sidebar-actions {
+  display: grid;
+  gap: 8px;
+  margin-top: auto;
+  color: #627084;
+  font-size: 12px;
+}
+
 .sidebar nav button {
   justify-content: flex-start;
   border-color: transparent;
@@ -152,6 +160,11 @@ button:focus-visible {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.button-row.compact {
+  flex-wrap: nowrap;
+  justify-content: flex-start;
 }
 
 h1 {

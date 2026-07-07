@@ -12,4 +12,6 @@ contextBridge.exposeInMainWorld('douyinDesktop', {
   getDockerStatus: () => ipcRenderer.invoke('docker:status'),
   startBackend: () => ipcRenderer.invoke('docker:start'),
   stopBackend: () => ipcRenderer.invoke('docker:stop'),
+  openAccountBrowser: (account) => ipcRenderer.invoke('browser:open-account', account),
+  closeAccountBrowser: () => ipcRenderer.invoke('browser:close-account'),
 });

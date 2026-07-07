@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
+const browserTabs = require('./browser-tabs');
 const docker = require('./docker');
 
 const BACKEND_URL = process.env.DOUYIN_DESKTOP_BACKEND_URL || 'http://127.0.0.1:19522';
@@ -38,6 +39,7 @@ function createWindow() {
   });
 
   mainWindow.loadURL(process.env.DOUYIN_DESKTOP_RENDERER_URL || 'http://127.0.0.1:5173');
+  mainWindow.on('resize', () => browserTabs.resizeActiveBrowser(mainWindow));
 }
 
 function registerIpc() {
@@ -70,6 +72,8 @@ function registerIpc() {
   ipcMain.handle('docker:status', async () => docker.getDockerStatus());
   ipcMain.handle('docker:start', async () => docker.startBackend());
   ipcMain.handle('docker:stop', async () => docker.stopBackend());
+  ipcMain.handle('browser:open-account', async (_event, account) => browserTabs.openAccountBrowser(mainWindow, account));
+  ipcMain.handle('browser:close-account', async () => browserTabs.closeAccountBrowser(mainWindow));
 }
 
 app.whenReady().then(() => {
