@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { closeAccountBrowser } from './api.js';
 import { AccountsPage } from './components/AccountsPage.jsx';
+import { LogsPage } from './components/LogsPage.jsx';
 import { SettingsPage } from './components/SettingsPage.jsx';
 import { TasksPage } from './components/TasksPage.jsx';
 
@@ -42,7 +43,7 @@ export function App() {
   const page = {
     accounts: <AccountsPage />,
     tasks: <TasksPage />,
-    logs: <PlaceholderPage title="日志" description="查看后端任务和账号浏览器事件。" />,
+    logs: <LogsPage />,
     settings: <SettingsPage />,
   }[activePage];
 

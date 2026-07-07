@@ -304,6 +304,10 @@ td code {
   min-width: 140px;
 }
 
+.limit-select {
+  width: 96px;
+}
+
 td .status-badge {
   margin-left: 8px;
 }

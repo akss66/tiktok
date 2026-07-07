@@ -41,6 +41,10 @@ export async function listEvents(filters) {
   return requireBridge().listEvents(filters);
 }
 
+export async function getAppInfo() {
+  return requireBridge().getAppInfo();
+}
+
 export async function getDockerStatus() {
   return requireBridge().getDockerStatus();
 }

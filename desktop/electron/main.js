@@ -72,6 +72,11 @@ function registerIpc() {
     const suffix = query.toString() ? `?${query}` : '';
     return backendRequest(`/api/events${suffix}`);
   });
+  ipcMain.handle('app:info', async () => ({
+    version: app.getVersion(),
+    userDataPath: app.getPath('userData'),
+    backendUrl: BACKEND_URL,
+  }));
   ipcMain.handle('docker:status', async () => docker.getDockerStatus());
   ipcMain.handle('docker:start', async () => docker.startBackend());
   ipcMain.handle('docker:stop', async () => docker.stopBackend());

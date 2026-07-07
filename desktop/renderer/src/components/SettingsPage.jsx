@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { getBackendHealth, getDockerStatus, startBackend, stopBackend } from '../api.js';
+import { getAppInfo, getBackendHealth, getDockerStatus, startBackend, stopBackend } from '../api.js';
 
 function StatusBadge({ tone, children }) {
   return <span className={`status-badge ${tone}`}>{children}</span>;
@@ -8,15 +8,17 @@ function StatusBadge({ tone, children }) {
 export function SettingsPage() {
   const [health, setHealth] = useState(null);
   const [docker, setDocker] = useState(null);
+  const [appInfo, setAppInfo] = useState(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
 
   async function refresh() {
     setLoading(true);
     setMessage('');
-    const [dockerResult, healthResult] = await Promise.allSettled([
+    const [dockerResult, healthResult, appResult] = await Promise.allSettled([
       getDockerStatus(),
       getBackendHealth(),
+      getAppInfo(),
     ]);
     setDocker(dockerResult.status === 'fulfilled' ? dockerResult.value : {
       available: false,
@@ -25,6 +27,7 @@ export function SettingsPage() {
       message: dockerResult.reason?.message || 'Docker 状态不可用',
     });
     setHealth(healthResult.status === 'fulfilled' ? healthResult.value : null);
+    setAppInfo(appResult.status === 'fulfilled' ? appResult.value : null);
     if (healthResult.status === 'rejected') setMessage(healthResult.reason?.message || '后端不可用');
     setLoading(false);
   }
@@ -82,17 +85,22 @@ export function SettingsPage() {
         </div>
         <div>
           <dt>API 地址</dt>
-          <dd>http://127.0.0.1:19522</dd>
+          <dd>{appInfo?.backendUrl || 'http://127.0.0.1:19522'}</dd>
         </div>
         <div>
-          <dt>服务版本</dt>
-          <dd>{health?.version || '-'}</dd>
+          <dt>应用版本</dt>
+          <dd>{appInfo?.version || '-'}</dd>
         </div>
       </dl>
 
       <div className="panel-section">
+        <h2>本地数据</h2>
+        <p>{appInfo?.userDataPath || '仅在 Electron 中可用'}</p>
+      </div>
+
+      <div className="panel-section">
         <h2>状态消息</h2>
-        <p>{message || docker?.message || '等待操作。'}</p>
+        <p>{message || docker?.message || health?.service || '等待操作。'}</p>
       </div>
     </section>
   );
