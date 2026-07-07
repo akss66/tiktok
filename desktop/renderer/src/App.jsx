@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { AccountsPage } from './components/AccountsPage.jsx';
 import { SettingsPage } from './components/SettingsPage.jsx';
 
 const NAV_ITEMS = [
@@ -26,7 +27,7 @@ export function App() {
   const [activePage, setActivePage] = useState('settings');
 
   const page = {
-    accounts: <PlaceholderPage title="账号" description="管理账号、分组、登录状态和浏览器 Profile。" />,
+    accounts: <AccountsPage />,
     tasks: <PlaceholderPage title="任务" description="创建和跟踪搜索、采集、回复等任务。" />,
     logs: <PlaceholderPage title="日志" description="查看后端任务和账号浏览器事件。" />,
     settings: <SettingsPage />,

@@ -17,6 +17,14 @@ export async function createAccount(input) {
   return requireBridge().createAccount(input);
 }
 
+export async function updateAccount(id, patch) {
+  return requireBridge().updateAccount(id, patch);
+}
+
+export async function deleteAccount(id) {
+  return requireBridge().deleteAccount(id);
+}
+
 export async function listTasks() {
   return requireBridge().listTasks();
 }

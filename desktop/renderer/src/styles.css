@@ -23,6 +23,23 @@ textarea {
   font: inherit;
 }
 
+input,
+select {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid #c9d0d9;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #17202a;
+  padding: 0 10px;
+}
+
+input:focus,
+select:focus {
+  outline: 2px solid #2f6fed;
+  outline-offset: 1px;
+}
+
 button {
   border: 1px solid #c9d0d9;
   border-radius: 6px;
@@ -214,6 +231,71 @@ p {
   color: #a1261f;
 }
 
+.inline-form {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(150px, 0.8fr) minmax(220px, 1.4fr) auto;
+  gap: 10px;
+  align-items: end;
+  border: 1px solid #d9dee7;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 12px;
+}
+
+.inline-form label {
+  display: grid;
+  gap: 6px;
+  color: #627084;
+  font-size: 12px;
+}
+
+.table-wrap {
+  overflow: auto;
+  border: 1px solid #d9dee7;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+table {
+  width: 100%;
+  min-width: 920px;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+th,
+td {
+  border-bottom: 1px solid #edf0f4;
+  padding: 10px;
+  text-align: left;
+  vertical-align: middle;
+}
+
+th {
+  color: #4f5d70;
+  background: #f9fafc;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+td code {
+  color: #4f5d70;
+  font-size: 12px;
+}
+
+.table-input {
+  min-width: 140px;
+}
+
+td .status-badge {
+  margin-left: 8px;
+}
+
+.empty-row {
+  color: #627084;
+  text-align: center;
+}
+
 @media (max-width: 760px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -229,6 +311,10 @@ p {
   }
 
   .status-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .inline-form {
     grid-template-columns: 1fr;
   }
 }

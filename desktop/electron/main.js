@@ -47,6 +47,13 @@ function registerIpc() {
     method: 'POST',
     body: JSON.stringify(input || {}),
   }));
+  ipcMain.handle('accounts:update', async (_event, id, patch) => backendRequest(`/api/accounts/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch || {}),
+  }));
+  ipcMain.handle('accounts:delete', async (_event, id) => backendRequest(`/api/accounts/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  }));
   ipcMain.handle('tasks:list', async () => backendRequest('/api/tasks'));
   ipcMain.handle('tasks:create', async (_event, input) => backendRequest('/api/tasks', {
     method: 'POST',
