@@ -1,0 +1,19 @@
+FROM node:22-bookworm-slim
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+
+COPY cli.js server.js desktop-backend.js config.example.json ./
+COPY lib ./lib
+COPY scripts ./scripts
+
+ENV NODE_ENV=production
+ENV DESKTOP_BACKEND_HOST=0.0.0.0
+ENV DESKTOP_BACKEND_PORT=19522
+ENV DOUYIN_DESKTOP_STORAGE_DIR=/data
+
+EXPOSE 19522
+
+CMD ["node", "desktop-backend.js"]

@@ -1,0 +1,9 @@
+.git
+.tools
+node_modules
+desktop/node_modules
+storage
+logs
+downloads
+*.log
+*.pid
