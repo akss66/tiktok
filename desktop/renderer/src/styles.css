@@ -255,6 +255,10 @@ p {
   padding: 12px;
 }
 
+.inline-form.task-form {
+  grid-template-columns: minmax(180px, 1fr) minmax(120px, 0.6fr) minmax(180px, 1fr) 90px auto;
+}
+
 .inline-form label {
   display: grid;
   gap: 6px;

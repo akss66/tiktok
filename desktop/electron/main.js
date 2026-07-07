@@ -61,6 +61,9 @@ function registerIpc() {
     method: 'POST',
     body: JSON.stringify(input || {}),
   }));
+  ipcMain.handle('tasks:run', async (_event, id) => backendRequest(`/api/tasks/${encodeURIComponent(id)}/run`, {
+    method: 'POST',
+  }));
   ipcMain.handle('events:list', async (_event, filters = {}) => {
     const query = new URLSearchParams();
     Object.entries(filters).forEach(([key, value]) => {

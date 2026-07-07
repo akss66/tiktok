@@ -33,6 +33,10 @@ export async function createTask(input) {
   return requireBridge().createTask(input);
 }
 
+export async function runTask(id) {
+  return requireBridge().runTask(id);
+}
+
 export async function listEvents(filters) {
   return requireBridge().listEvents(filters);
 }

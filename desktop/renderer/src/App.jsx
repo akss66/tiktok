@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { closeAccountBrowser } from './api.js';
 import { AccountsPage } from './components/AccountsPage.jsx';
 import { SettingsPage } from './components/SettingsPage.jsx';
+import { TasksPage } from './components/TasksPage.jsx';
 
 const NAV_ITEMS = [
   { id: 'accounts', label: '账号' },
@@ -40,7 +41,7 @@ export function App() {
 
   const page = {
     accounts: <AccountsPage />,
-    tasks: <PlaceholderPage title="任务" description="创建和跟踪搜索、采集、回复等任务。" />,
+    tasks: <TasksPage />,
     logs: <PlaceholderPage title="日志" description="查看后端任务和账号浏览器事件。" />,
     settings: <SettingsPage />,
   }[activePage];

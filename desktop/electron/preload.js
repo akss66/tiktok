@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('douyinDesktop', {
   deleteAccount: (id) => ipcRenderer.invoke('accounts:delete', id),
   listTasks: () => ipcRenderer.invoke('tasks:list'),
   createTask: (input) => ipcRenderer.invoke('tasks:create', input),
+  runTask: (id) => ipcRenderer.invoke('tasks:run', id),
   listEvents: (filters) => ipcRenderer.invoke('events:list', filters),
   getDockerStatus: () => ipcRenderer.invoke('docker:status'),
   startBackend: () => ipcRenderer.invoke('docker:start'),

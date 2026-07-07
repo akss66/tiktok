@@ -70,4 +70,40 @@ describe('desktop api', () => {
     expect(task.status).toBe('pending');
     expect(task.type).toBe('search');
   });
+
+  it('runs a task through the configured runner', async () => {
+    await new Promise((resolve) => server.close(resolve));
+    server = createDesktopApiServer({
+      storageDir: dir,
+      taskRunner: async (db, taskId) => {
+        const taskStore = require('../lib/desktop/tasks');
+        return taskStore.updateTaskStatus(db, taskId, 'success', {
+          resultSummary: { count: 1 },
+          finishedAt: new Date().toISOString(),
+        });
+      },
+    });
+    baseUrl = await listen(server);
+
+    const account = await (await fetch(`${baseUrl}/api/accounts`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: '账号A' }),
+    })).json();
+    const task = await (await fetch(`${baseUrl}/api/tasks`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        accountId: account.id,
+        type: 'search',
+        input: { keyword: '美食', count: 3 },
+      }),
+    })).json();
+
+    const run = await fetch(`${baseUrl}/api/tasks/${task.id}/run`, { method: 'POST' });
+    expect(run.status).toBe(200);
+    const result = await run.json();
+    expect(result.status).toBe('success');
+    expect(result.resultSummary.count).toBe(1);
+  });
 });
