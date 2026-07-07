@@ -28,3 +28,15 @@ export async function createTask(input) {
 export async function listEvents(filters) {
   return requireBridge().listEvents(filters);
 }
+
+export async function getDockerStatus() {
+  return requireBridge().getDockerStatus();
+}
+
+export async function startBackend() {
+  return requireBridge().startBackend();
+}
+
+export async function stopBackend() {
+  return requireBridge().stopBackend();
+}

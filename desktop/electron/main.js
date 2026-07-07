@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
+const docker = require('./docker');
 
 const BACKEND_URL = process.env.DOUYIN_DESKTOP_BACKEND_URL || 'http://127.0.0.1:19522';
 
@@ -59,6 +60,9 @@ function registerIpc() {
     const suffix = query.toString() ? `?${query}` : '';
     return backendRequest(`/api/events${suffix}`);
   });
+  ipcMain.handle('docker:status', async () => docker.getDockerStatus());
+  ipcMain.handle('docker:start', async () => docker.startBackend());
+  ipcMain.handle('docker:stop', async () => docker.stopBackend());
 }
 
 app.whenReady().then(() => {

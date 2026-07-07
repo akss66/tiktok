@@ -38,6 +38,11 @@ button:hover {
   background: #f7f9fb;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 button:focus-visible {
   outline: 2px solid #2f6fed;
   outline-offset: 2px;
@@ -110,6 +115,26 @@ button:focus-visible {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+}
+
+.panel-section {
+  border: 1px solid #d9dee7;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 14px;
+}
+
+.panel-section h2 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  letter-spacing: 0;
+}
+
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 h1 {
