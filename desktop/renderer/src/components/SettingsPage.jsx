@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { getAppInfo, getBackendHealth, getDockerStatus, startBackend, stopBackend } from '../api.js';
+import { getAppInfo, getBackendHealth, getBridgeHealth, getDockerStatus, startBackend, stopBackend } from '../api.js';
 
 function StatusBadge({ tone, children }) {
   return <span className={`status-badge ${tone}`}>{children}</span>;
@@ -7,6 +7,7 @@ function StatusBadge({ tone, children }) {
 
 export function SettingsPage() {
   const [health, setHealth] = useState(null);
+  const [bridgeHealth, setBridgeHealth] = useState(null);
   const [docker, setDocker] = useState(null);
   const [appInfo, setAppInfo] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -15,9 +16,10 @@ export function SettingsPage() {
   async function refresh() {
     setLoading(true);
     setMessage('');
-    const [dockerResult, healthResult, appResult] = await Promise.allSettled([
+    const [dockerResult, healthResult, bridgeResult, appResult] = await Promise.allSettled([
       getDockerStatus(),
       getBackendHealth(),
+      getBridgeHealth(),
       getAppInfo(),
     ]);
     setDocker(dockerResult.status === 'fulfilled' ? dockerResult.value : {
@@ -27,6 +29,7 @@ export function SettingsPage() {
       message: dockerResult.reason?.message || 'Docker 状态不可用',
     });
     setHealth(healthResult.status === 'fulfilled' ? healthResult.value : null);
+    setBridgeHealth(bridgeResult.status === 'fulfilled' ? bridgeResult.value : null);
     setAppInfo(appResult.status === 'fulfilled' ? appResult.value : null);
     if (healthResult.status === 'rejected') setMessage(healthResult.reason?.message || '后端不可用');
     setLoading(false);
@@ -60,6 +63,12 @@ export function SettingsPage() {
     ? <StatusBadge tone={docker.running ? 'success' : 'warning'}>{docker.running ? '运行中' : '未运行'}</StatusBadge>
     : <StatusBadge tone="danger">不可用</StatusBadge>;
 
+  const bridgeBadge = useMemo(() => {
+    if (loading) return <StatusBadge tone="neutral">检查中</StatusBadge>;
+    if (bridgeHealth?.ok) return <StatusBadge tone="success">在线</StatusBadge>;
+    return <StatusBadge tone="danger">离线</StatusBadge>;
+  }, [bridgeHealth, loading]);
+
   return (
     <section className="panel" aria-labelledby="settings-title">
       <div className="panel-header">
@@ -84,8 +93,20 @@ export function SettingsPage() {
           <dd>{backendBadge}</dd>
         </div>
         <div>
+          <dt>Bridge Server</dt>
+          <dd>{bridgeBadge}</dd>
+        </div>
+        <div>
+          <dt>浏览器连接数</dt>
+          <dd>{bridgeHealth?.connections ?? '-'}</dd>
+        </div>
+        <div>
           <dt>API 地址</dt>
           <dd>{appInfo?.backendUrl || 'http://127.0.0.1:19522'}</dd>
+        </div>
+        <div>
+          <dt>Bridge 地址</dt>
+          <dd>{appInfo?.bridgeUrl || 'http://127.0.0.1:19422'}</dd>
         </div>
         <div>
           <dt>应用版本</dt>

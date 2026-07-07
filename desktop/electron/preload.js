@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('douyinDesktop', {
   getBackendHealth: () => ipcRenderer.invoke('backend:health'),
+  getBridgeHealth: () => ipcRenderer.invoke('bridge:health'),
   listAccounts: () => ipcRenderer.invoke('accounts:list'),
   createAccount: (input) => ipcRenderer.invoke('accounts:create', input),
   updateAccount: (id, patch) => ipcRenderer.invoke('accounts:update', id, patch),

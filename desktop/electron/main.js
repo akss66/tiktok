@@ -4,6 +4,7 @@ const browserTabs = require('./browser-tabs');
 const docker = require('./docker');
 
 const BACKEND_URL = process.env.DOUYIN_DESKTOP_BACKEND_URL || 'http://127.0.0.1:19522';
+const BRIDGE_URL = process.env.DOUYIN_DESKTOP_BRIDGE_URL || 'http://127.0.0.1:19422';
 
 let mainWindow;
 
@@ -18,6 +19,15 @@ async function backendRequest(pathname, options = {}) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(data.error || `Backend request failed: ${response.status}`);
+  }
+  return data;
+}
+
+async function bridgeRequest(pathname) {
+  const response = await fetch(`${BRIDGE_URL}${pathname}`);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || `Bridge request failed: ${response.status}`);
   }
   return data;
 }
@@ -44,6 +54,7 @@ function createWindow() {
 
 function registerIpc() {
   ipcMain.handle('backend:health', async () => backendRequest('/api/health'));
+  ipcMain.handle('bridge:health', async () => bridgeRequest('/api/health'));
   ipcMain.handle('accounts:list', async () => backendRequest('/api/accounts'));
   ipcMain.handle('accounts:create', async (_event, input) => backendRequest('/api/accounts', {
     method: 'POST',
@@ -76,6 +87,7 @@ function registerIpc() {
     version: app.getVersion(),
     userDataPath: app.getPath('userData'),
     backendUrl: BACKEND_URL,
+    bridgeUrl: BRIDGE_URL,
   }));
   ipcMain.handle('docker:status', async () => docker.getDockerStatus());
   ipcMain.handle('docker:start', async () => docker.startBackend());

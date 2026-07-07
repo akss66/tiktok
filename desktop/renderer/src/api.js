@@ -9,6 +9,10 @@ export async function getBackendHealth() {
   return requireBridge().getBackendHealth();
 }
 
+export async function getBridgeHealth() {
+  return requireBridge().getBridgeHealth();
+}
+
 export async function listAccounts() {
   return requireBridge().listAccounts();
 }
