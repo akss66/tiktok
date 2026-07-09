@@ -2,35 +2,26 @@ const fs = require('fs');
 const path = require('path');
 const { BrowserView, session } = require('electron');
 const { partitionForAccount } = require('./profiles');
-
-const DOUYIN_HOME_URL = 'https://www.douyin.com/jingxuan';
-const DOUYIN_LOGIN_URL = 'https://www.douyin.com/?login=1';
-const SIDEBAR_WIDTH = 220;
-const BROWSER_DOCK_MIN_WIDTH = 560;
-const BROWSER_DOCK_MAX_WIDTH = 980;
-const APP_MIN_VISIBLE_WIDTH = 520;
-const LOGIN_COOKIE_CHECK_INTERVAL_MS = 10000;
-const LOGIN_PAGE_COOLDOWN_MS = 90000;
-const BRIDGE_INJECTION_VERSION = '2026-07-09-bridge-ready-guard';
-const BLOCKED_EXTERNAL_PROTOCOLS = new Set([
-  'bytedance:',
-  'douyin:',
-  'douyinlite:',
-  'snssdk1128:',
-  'snssdk2329:',
-  'snssdk143:',
-  'aweme:',
-]);
-const DOUYIN_LOGIN_COOKIE_NAMES = new Set([
-  'sessionid',
-  'sessionid_ss',
-  'sid_guard',
-  'sid_tt',
-  'uid_tt',
-  'uid_tt_ss',
-  'passport_auth_status',
-  'passport_auth_status_ss',
-]);
+const {
+  BRIDGE_INJECTION_VERSION,
+  DOUYIN_HOME_URL,
+  DOUYIN_LOGIN_URL,
+  LOGIN_COOKIE_CHECK_INTERVAL_MS,
+  LOGIN_PAGE_COOLDOWN_MS,
+  chromeCompatUserAgent,
+  getDockedBrowserWidth,
+  isHttpUrl,
+  resolveBridgeConfig,
+  shouldBlockExternalProtocol,
+} = require('./browser-config');
+const {
+  buildLoginProbeScript,
+  getLoginCookieResult,
+  isLoggedInCookie,
+  isLoggedInProbeResult,
+  readDouyinLoginCookies,
+} = require('./login-detector');
+const { compileUserscriptForElectron } = require('./userscript-compiler');
 
 let activeView = null;
 let activeAccountKey = null;
@@ -47,11 +38,6 @@ const accountViews = new Map();
 const loginDetectors = new Map();
 const loginPageOpenedAt = new Map();
 
-function chromeCompatUserAgent() {
-  const chromeVersion = process.versions.chrome || '120.0.0.0';
-  return `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`;
-}
-
 function createAccountBrowserView(account, options = {}) {
   const webPreferences = {
     partition: options.partition || partitionForAccount(account),
@@ -66,36 +52,6 @@ function createAccountBrowserView(account, options = {}) {
   view.__douyinDesktopBridgePreload = Boolean(options.bridgePreload);
   view.webContents.setUserAgent(chromeCompatUserAgent(), 'zh-CN,zh;q=0.9');
   return view;
-}
-
-function resolveBridgeConfig() {
-  try {
-    const configPath = path.resolve(__dirname, '..', '..', 'config.json');
-    const raw = fs.readFileSync(configPath, 'utf8');
-    const cfg = JSON.parse(raw) || {};
-    const bridge = cfg.bridge || {};
-    const rawHost = String(bridge.host || '127.0.0.1').trim().replace(/^[a-z]+:\/\//, '');
-    const host = rawHost === '0.0.0.0' ? '127.0.0.1' : rawHost;
-    const port = Number(bridge.port || 19422);
-    const resolvedPort = Number.isFinite(port) && port > 0 ? port : 19422;
-    return {
-      host,
-      port: resolvedPort,
-      site: 'douyin.com',
-      token: bridge.token || '',
-      server: `http://${host}:${resolvedPort}`,
-      managedPoll: true,
-    };
-  } catch {
-    return {
-      host: '127.0.0.1',
-      port: 19422,
-      site: 'douyin.com',
-      token: '',
-      server: 'http://127.0.0.1:19422',
-      managedPoll: true,
-    };
-  }
 }
 
 function destroyActiveView(mainWindow) {
@@ -150,67 +106,6 @@ function getLoginCooldown(accountKey) {
 
 function markLoginPageOpened(accountKey) {
   loginPageOpenedAt.set(accountKey, Date.now());
-}
-
-function isLoggedInProbeResult(value) {
-  const user = value?.user || value?.data?.user || {};
-  return Boolean(user.sec_uid || user.secUid || user.uid || user.user_id || user.nickname);
-}
-
-function isDouyinCookie(cookie) {
-  const domain = String(cookie?.domain || '').replace(/^\./, '');
-  return domain === 'douyin.com' || domain.endsWith('.douyin.com');
-}
-
-function isLoggedInCookie(cookie) {
-  return Boolean(
-    cookie
-      && !cookie.expired
-      && DOUYIN_LOGIN_COOKIE_NAMES.has(cookie.name)
-      && String(cookie.value || '').trim()
-      && isDouyinCookie(cookie),
-  );
-}
-
-function getLoginCookieResult(cookies = []) {
-  const loginCookie = cookies.find(isLoggedInCookie);
-  if (!loginCookie) return { loggedIn: false };
-  const uidCookie = cookies.find((cookie) => isDouyinCookie(cookie) && ['uid_tt', 'uid_tt_ss'].includes(cookie.name));
-  return {
-    loggedIn: true,
-    uid: uidCookie?.value || '',
-    source: loginCookie.name,
-  };
-}
-
-async function readDouyinLoginCookies(view) {
-  if (!view || view.webContents.isDestroyed()) return { loggedIn: false };
-  const cookies = await view.webContents.session.cookies.get({ url: 'https://www.douyin.com' });
-  return getLoginCookieResult(cookies);
-}
-
-function buildLoginProbeScript() {
-  return `
-    (async function () {
-      try {
-        var response = await fetch('/aweme/v1/web/query/user/?device_platform=webapp&aid=6383&channel=channel_pc_web', {
-          credentials: 'include',
-          cache: 'no-store'
-        });
-        if (!response.ok) return { loggedIn: false, status: response.status };
-        var data = await response.json();
-        var user = (data && (data.user || (data.data && data.data.user))) || {};
-        return {
-          loggedIn: Boolean(user.sec_uid || user.secUid || user.uid || user.user_id || user.nickname),
-          nickname: user.nickname || '',
-          uid: user.uid || user.user_id || '',
-          secUid: user.sec_uid || user.secUid || ''
-        };
-      } catch (error) {
-        return { loggedIn: false, error: error.message || String(error) };
-      }
-    })();
-  `;
 }
 
 function stopLoginDetector(accountKey) {
@@ -505,56 +400,6 @@ function buildInjectionScript() {
   `;
 }
 
-function compileUserscriptForElectron(source) {
-  let compiled = inlineUserscriptEvalBlock(source, 'DM_BRIDGE_CODE');
-  compiled = inlineUserscriptEvalBlock(compiled, 'BRIDGE_CODE');
-  return `${compiled}\n//# sourceURL=vulcan-douyin-userscript.user.js`;
-}
-
-function inlineUserscriptEvalBlock(source, variableName) {
-  const startMarker = `  var ${variableName} = (function`;
-  const evalMarker = `  unsafeWindow.eval(${variableName});`;
-  const start = source.indexOf(startMarker);
-  if (start === -1) {
-    throw new Error(`Unable to find ${variableName} declaration in douyin.user.js`);
-  }
-  const evalStart = source.indexOf(evalMarker, start);
-  if (evalStart === -1) {
-    throw new Error(`Unable to find unsafeWindow.eval(${variableName}) in douyin.user.js`);
-  }
-  const evalEnd = source.indexOf('\n', evalStart);
-  const replaceEnd = evalEnd === -1 ? evalStart + evalMarker.length : evalEnd + 1;
-  const block = indentUserscriptBlock(extractUserscriptBlock(source, variableName), '  ');
-  return `${source.slice(0, start)}  // Vulcan Mini Tampermonkey: inlined ${variableName} to avoid page eval/CSP issues.\n${block}\n${source.slice(replaceEnd)}`;
-}
-
-function indentUserscriptBlock(block, indent) {
-  return String(block)
-    .replace(/\r\n/g, '\n')
-    .split('\n')
-    .map((line) => (line ? `${indent}${line}` : ''))
-    .join('\n');
-}
-
-function extractUserscriptBlock(source, variableName) {
-  const declaration = `var ${variableName} = (function`;
-  const declarationStart = source.indexOf(declaration);
-  if (declarationStart === -1) {
-    throw new Error(`Unable to find ${variableName} declaration in douyin.user.js`);
-  }
-  const bodyStartMarker = '{/*';
-  const bodyStart = source.indexOf(bodyStartMarker, declarationStart);
-  if (bodyStart === -1) {
-    throw new Error(`Unable to find ${variableName} body start in douyin.user.js`);
-  }
-  const bodyEndMarker = '*/}).toString().match';
-  const bodyEnd = source.indexOf(bodyEndMarker, bodyStart + bodyStartMarker.length);
-  if (bodyEnd === -1) {
-    throw new Error(`Unable to find ${variableName} body end in douyin.user.js`);
-  }
-  return source.slice(bodyStart + bodyStartMarker.length, bodyEnd);
-}
-
 function resizeActiveBrowser(mainWindow) {
   if (!activeView || !activeViewVisible || !mainWindow || mainWindow.isDestroyed()) return;
   const [width, height] = mainWindow.getContentSize();
@@ -565,34 +410,6 @@ function resizeActiveBrowser(mainWindow) {
     width: browserWidth,
     height,
   });
-}
-
-function getDockedBrowserWidth(windowWidth) {
-  const preferred = Math.round(windowWidth * 0.52);
-  const maxByAppSpace = Math.max(BROWSER_DOCK_MIN_WIDTH, windowWidth - SIDEBAR_WIDTH - APP_MIN_VISIBLE_WIDTH);
-  return Math.min(
-    BROWSER_DOCK_MAX_WIDTH,
-    maxByAppSpace,
-    Math.max(BROWSER_DOCK_MIN_WIDTH, preferred),
-  );
-}
-
-function shouldBlockExternalProtocol(rawUrl) {
-  try {
-    const parsed = new URL(rawUrl);
-    return BLOCKED_EXTERNAL_PROTOCOLS.has(parsed.protocol);
-  } catch {
-    return false;
-  }
-}
-
-function isHttpUrl(rawUrl) {
-  try {
-    const parsed = new URL(rawUrl);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
-  } catch {
-    return false;
-  }
 }
 
 function notifyBrowserNotice(mainWindow, message, metadata = {}) {
