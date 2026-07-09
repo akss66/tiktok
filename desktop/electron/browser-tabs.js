@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { BrowserView, session } = require('electron');
+const { BrowserView, BrowserWindow, session } = require('electron');
 const { partitionForAccount } = require('./profiles');
 const {
   BRIDGE_INJECTION_VERSION,
@@ -686,6 +686,94 @@ async function fetchWithActiveBrowserSession({ method, url, headers, body }) {
   };
 }
 
+async function fetchWithActiveBrowserSessionWithFallback(request) {
+  try {
+    return await fetchWithActiveBrowserSession(request);
+  } catch (error) {
+    const fallback = await fetchWithHiddenNavigation({
+      ...request,
+      session: activeView && !activeView.webContents.isDestroyed()
+        ? activeView.webContents.session
+        : null,
+      userAgent: activeView && !activeView.webContents.isDestroyed()
+        ? activeView.webContents.getUserAgent()
+        : '',
+    }).catch((fallbackError) => ({
+      status: 0,
+      error: `browser session fetch failed: ${error.message || String(error)}; navigation fallback failed: ${fallbackError.message || String(fallbackError)}; URL: ${request && request.url}`,
+    }));
+    if (fallback) return fallback;
+    throw error;
+  }
+}
+
+async function fetchWithHiddenNavigation({ method, url, headers, session: browserSession, userAgent }) {
+  const normalizedMethod = String(method || 'GET').toUpperCase();
+  if (!['GET', 'HEAD'].includes(normalizedMethod)) return null;
+  if (!browserSession || !url) return null;
+
+  const safeHeaders = {};
+  let referrer = '';
+  Object.entries(headers || {}).forEach(([key, value]) => {
+    const normalized = String(key).toLowerCase();
+    if (normalized === 'referer' || normalized === 'referrer') {
+      referrer = String(value || '');
+      return;
+    }
+    if (['cookie', 'host', 'connection', 'content-length'].includes(normalized)) return;
+    safeHeaders[key] = value;
+  });
+
+  const requestWindow = new BrowserWindow({
+    show: false,
+    width: 800,
+    height: 600,
+    webPreferences: {
+      session: browserSession,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  if (userAgent) requestWindow.webContents.setUserAgent(userAgent, 'zh-CN,zh;q=0.9');
+
+  let statusCode = 200;
+  const completedHandler = (details) => {
+    if (details.webContentsId === requestWindow.webContents.id) {
+      statusCode = details.statusCode || statusCode;
+    }
+  };
+  browserSession.webRequest.onCompleted({ urls: [url] }, completedHandler);
+
+  try {
+    const extraHeaders = Object.entries(safeHeaders)
+      .map(([key, value]) => `${key}: ${value}`)
+      .join('\n');
+
+    await Promise.race([
+      requestWindow.webContents.loadURL(url, {
+        ...(referrer ? { httpReferrer: referrer } : {}),
+        ...(extraHeaders ? { extraHeaders } : {}),
+      }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('navigation fallback timeout')), 35000)),
+    ]);
+    const responseText = await requestWindow.webContents.executeJavaScript(
+      'document.body ? document.body.innerText : document.documentElement.innerText',
+      true,
+    );
+    return {
+      status: statusCode,
+      statusText: '',
+      responseText: String(responseText || ''),
+      finalUrl: requestWindow.webContents.getURL() || url,
+      responseHeaders: '{}',
+    };
+  } finally {
+    browserSession.webRequest.onCompleted({ urls: [url] }, null);
+    if (!requestWindow.isDestroyed()) requestWindow.destroy();
+  }
+}
+
 async function runBridgeSelfTest() {
   if (!activeView || activeView.webContents.isDestroyed()) {
     return { ok: false, stage: 'browser', error: '没有已打开的账号浏览器' };
@@ -1003,7 +1091,7 @@ module.exports = {
   buildLoginProbeScript,
   closeAccountBrowser,
   ensureBridgeInjected,
-  fetchWithActiveBrowserSession,
+  fetchWithActiveBrowserSession: fetchWithActiveBrowserSessionWithFallback,
   forceStartBridge,
   getBridgeDiagnostic,
   getLoginCooldown,
