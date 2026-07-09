@@ -1,5 +1,7 @@
 # Douyin Desktop
 
+See [TEAM_RUN.md](./TEAM_RUN.md) for the minimum teammate runbook (Windows).
+
 ## 开发运行
 
 1. 启动 Docker Desktop。

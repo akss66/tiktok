@@ -1,9 +1,19 @@
 import { useEffect, useState } from 'react';
-import { createAccount, deleteAccount, listAccounts, openAccountBrowser, updateAccount } from '../api.js';
+import {
+  createAccount,
+  deleteAccount,
+  listAccounts,
+  openAccountBrowser,
+  openCleanLoginBrowser,
+  openEdgeAccountBrowser,
+  resetAccountBrowser,
+  updateAccount,
+} from '../api.js';
+import { PageHeader } from './PageHeader.jsx';
 
 const STATUS_OPTIONS = [
   { value: 'login_required', label: '需登录' },
-  { value: 'online', label: '在线' },
+  { value: 'online', label: '已登录' },
   { value: 'offline', label: '离线' },
   { value: 'disabled', label: '停用' },
 ];
@@ -19,7 +29,7 @@ function statusTone(value) {
   return 'danger';
 }
 
-export function AccountsPage() {
+export function AccountsPage({ onBrowserOpened }) {
   const [accounts, setAccounts] = useState([]);
   const [form, setForm] = useState({ name: '', group: '', notes: '' });
   const [loading, setLoading] = useState(false);
@@ -67,11 +77,18 @@ export function AccountsPage() {
 
   async function handleDelete(account) {
     setError('');
+    const confirmed = window.confirm(`确定删除「${account.name}」吗？这会同时清空该账号的浏览器登录态、Cookie 和缓存。`);
+    if (!confirmed) return;
+    setLoading(true);
     try {
       await deleteAccount(account.id);
       setAccounts((items) => items.filter((item) => item.id !== account.id));
+      setForm({ name: '', group: '', notes: '' });
+      setError(`已删除 ${account.name}，并清空该账号浏览器环境`);
     } catch (err) {
       setError(err.message || '账号删除失败');
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -79,9 +96,79 @@ export function AccountsPage() {
     setError('');
     try {
       const result = await openAccountBrowser(account);
-      if (!result.ok) setError(result.error || '浏览器打开失败');
+      if (!result.ok) {
+        setError(result.error || '浏览器打开失败');
+        return;
+      }
+      onBrowserOpened?.();
     } catch (err) {
       setError(err.message || '浏览器打开失败');
+    }
+  }
+
+  async function handleOpenEdgeBrowser(account) {
+    setError('');
+    try {
+      const result = await openEdgeAccountBrowser(account);
+      if (!result.ok) {
+        setError(result.error || 'Edge 浏览器打开失败');
+        return;
+      }
+      setError(`已打开 Edge 托管浏览器：账号 ${account.name} 使用独立资料目录，登录状态会保存在该账号环境里。`);
+    } catch (err) {
+      setError(err.message || 'Edge 浏览器打开失败');
+    }
+  }
+
+  async function handleOpenCleanLogin(account) {
+    setError('');
+    try {
+      const result = await openCleanLoginBrowser(account);
+      if (!result.ok) {
+        setError(result.error || '纯净登录诊断浏览器打开失败');
+        return;
+      }
+      setError('已打开纯净登录诊断浏览器：不复用缓存、不注入 Bridge，只用于判断是否为网络/IP/账号限流。');
+      onBrowserOpened?.();
+    } catch (err) {
+      setError(err.message || '纯净登录诊断浏览器打开失败');
+    }
+  }
+
+  async function handleResetBrowser(account) {
+    setError('');
+    const confirmed = window.confirm(`确定要重置「${account.name}」的浏览器环境吗？这会清空该账号的 Cookie、缓存和本地存储，需要重新扫码登录。`);
+    if (!confirmed) return;
+    setLoading(true);
+    try {
+      const result = await resetAccountBrowser(account);
+      if (!result.ok) {
+        setError(result.error || '浏览器环境重置失败');
+        return;
+      }
+      setError('浏览器环境已重置，请重新打开该账号浏览器扫码');
+    } catch (err) {
+      setError(err.message || '浏览器环境重置失败');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleMoreAction(account, action) {
+    if (action === 'edge') {
+      await handleOpenEdgeBrowser(account);
+      return;
+    }
+    if (action === 'diagnose') {
+      await handleOpenCleanLogin(account);
+      return;
+    }
+    if (action === 'reset') {
+      await handleResetBrowser(account);
+      return;
+    }
+    if (action === 'delete') {
+      await handleDelete(account);
     }
   }
 
@@ -89,15 +176,24 @@ export function AccountsPage() {
     refresh();
   }, []);
 
+  useEffect(() => {
+    if (!window.douyinDesktop?.onAccountsChanged) return undefined;
+    return window.douyinDesktop.onAccountsChanged((payload) => {
+      if (!payload?.account) return;
+      setAccounts((items) => items.map((item) => (
+        item.id === payload.account.id ? payload.account : item
+      )));
+      setError('');
+    });
+  }, []);
+
   return (
-    <section className="panel" aria-labelledby="accounts-title">
-      <div className="panel-header">
-        <div>
-          <h1 id="accounts-title">账号</h1>
-          <p>管理账号分组、登录状态和浏览器 Profile。</p>
-        </div>
-        <button type="button" onClick={refresh} disabled={loading}>刷新</button>
-      </div>
+    <section className="panel">
+      <PageHeader
+        title="账号"
+        description="每个账号使用独立浏览器信息；打开后可隐藏，登录状态不会丢。"
+        actions={<button type="button" onClick={refresh} disabled={loading}>刷新</button>}
+      />
 
       <form className="inline-form" onSubmit={handleCreate}>
         <label>
@@ -136,7 +232,7 @@ export function AccountsPage() {
               <th>名称</th>
               <th>分组</th>
               <th>状态</th>
-              <th>Profile</th>
+              <th>浏览器信息</th>
               <th>最近在线</th>
               <th>备注</th>
               <th>操作</th>
@@ -177,9 +273,25 @@ export function AccountsPage() {
                   />
                 </td>
                 <td>
-                  <div className="button-row compact">
-                    <button type="button" onClick={() => handleOpenBrowser(account)}>打开浏览器</button>
-                    <button type="button" onClick={() => handleDelete(account)}>删除</button>
+                  <div className="account-actions">
+                    <button type="button" className="primary-action" onClick={() => handleOpenBrowser(account)}>打开浏览器</button>
+                    <select
+                      className="action-select"
+                      defaultValue=""
+                      disabled={loading}
+                      aria-label={`${account.name} 更多操作`}
+                      onChange={(event) => {
+                        const action = event.target.value;
+                        event.target.value = '';
+                        handleMoreAction(account, action);
+                      }}
+                    >
+                      <option value="" disabled>更多操作</option>
+                      <option value="edge">Edge 备用登录</option>
+                      <option value="diagnose">登录诊断</option>
+                      <option value="reset">重置环境</option>
+                      <option value="delete">删除账号</option>
+                    </select>
                   </div>
                 </td>
               </tr>
@@ -187,7 +299,7 @@ export function AccountsPage() {
             {!accounts.length ? (
               <tr>
                 <td colSpan="7" className="empty-row">
-                  {loading ? '账号加载中...' : '还没有账号。先创建一个账号，再打开浏览器登录。'}
+                  {loading ? '账号加载中...' : '还没有账号。先创建账号，再打开该账号浏览器登录。'}
                 </td>
               </tr>
             ) : null}

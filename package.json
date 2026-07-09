@@ -15,11 +15,13 @@
     "dashboard": "node cli.js dashboard",
     "log": "node cli.js log",
     "desktop:backend": "node desktop-backend.js",
+    "desktop:poll-mock": "node scripts/bridge-poll-mock.js",
+    "desktop:smoke": "node scripts/desktop-task-smoke.js",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
-    "better-sqlite3": "^11.10.0",
+    "better-sqlite3": "^12.11.1",
     "ws": "^8.18.0"
   },
   "devDependencies": {

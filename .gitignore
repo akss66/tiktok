@@ -1,4 +1,6 @@
 node_modules/
+desktop/renderer/dist/
+.tools/
 .idea/
 logs/
 docs/

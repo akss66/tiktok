@@ -12,19 +12,21 @@
 // 替换 {{SITE_NAME}}、{{URL_PATTERN}}、{{SITE_KEY}} 后使用。
 // 通过 GM_xmlhttpRequest 绕过 Chrome PNA，unsafeWindow.eval 注入页面 API。
 // ═══════════════════════════════════════════════════════════
-
 (function() {
   'use strict';
 
+  var BRIDGE_CONFIG = window.__douyinDesktopBridgeConfig || {};
   var CONFIG = {
-    server: 'http://127.0.0.1:19422',
-    site: '{{SITE_KEY}}',
-    token: '',  // 填入 config.json 中的 bridge.token
+    server: BRIDGE_CONFIG.server || 'http://127.0.0.1:19422',
+    site: BRIDGE_CONFIG.site || '{{SITE_KEY}}',
+    token: BRIDGE_CONFIG.token || '',
     reconnectDelay: 2000,
+    managedPoll: BRIDGE_CONFIG.managedPoll === true,
   };
 
   var connected = false;
   var registered = false;
+  var clientId = '';
   var retryCount = 0;
   var pollFailCount = 0;
 
@@ -66,6 +68,12 @@
           }),
         });
         if (r.status === 200) {
+          try {
+            var connectPayload = JSON.parse(r.responseText || '{}');
+            clientId = connectPayload.id || '';
+          } catch (e) {
+            clientId = '';
+          }
           registered = true; connected = true; retryCount = 0;
           console.log('[Bridge] ✓ Registered with Bridge Server');
         } else { throw new Error('status ' + r.status); }
@@ -83,7 +91,9 @@
   async function poll() {
     if (!registered) return;
     try {
-      var r = await gmFetch(CONFIG.server + '/api/poll?site=' + CONFIG.site, { method: 'GET' });
+      var pollUrl = CONFIG.server + '/api/poll?site=' + encodeURIComponent(CONFIG.site);
+      if (clientId) pollUrl += '&connId=' + encodeURIComponent(clientId);
+      var r = await gmFetch(pollUrl, { method: 'GET' });
       if (r.status !== 200) throw new Error('status ' + r.status);
       var msg = JSON.parse(r.responseText);
       if (msg.type === 'eval') {
@@ -159,6 +169,10 @@ console.log('[Bridge:{{SITE_NAME}}] __bridge API ready');
   unsafeWindow.eval(BRIDGE_CODE);
 
   // ── 启动 ──
-  connect();
+  if (!CONFIG.managedPoll) {
+    connect();
+  } else {
+    console.log('[Bridge] Polling is managed by Electron');
+  }
   console.log('[Bridge] Script loaded for ' + CONFIG.site);
 })();

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { listEvents } from '../api.js';
+import { PageHeader } from './PageHeader.jsx';
 
 function formatMetadata(metadata) {
   if (!metadata || !Object.keys(metadata).length) return '-';
@@ -35,13 +36,16 @@ export function LogsPage() {
   }, []);
 
   return (
-    <section className="panel" aria-labelledby="logs-title">
-      <div className="panel-header">
-        <div>
-          <h1 id="logs-title">日志</h1>
-          <p>查看账号、任务和后端事件。</p>
-        </div>
-        <div className="button-row">
+    <section className="panel">
+      <PageHeader
+        title="日志"
+        description="查看账号、任务和后端事件，定位失败原因。"
+        actions={<button type="button" onClick={() => refresh()} disabled={loading}>刷新</button>}
+      />
+
+      <div className="panel-section logs-toolbar">
+        <label>
+          <span>日志数量</span>
           <select
             className="limit-select"
             value={limit}
@@ -56,8 +60,7 @@ export function LogsPage() {
             <option value="100">100 条</option>
             <option value="200">200 条</option>
           </select>
-          <button type="button" onClick={() => refresh()} disabled={loading}>刷新</button>
-        </div>
+        </label>
       </div>
 
       {error ? <p className="inline-error" role="alert">{error}</p> : null}

@@ -16,15 +16,18 @@
 (function () {
   'use strict';
 
+  const BRIDGE_CONFIG = window.__douyinDesktopBridgeConfig || {};
   const CONFIG = {
-    server: 'http://127.0.0.1:19422',
-    site: 'douyin.com',
-    token: '',  // 填入 config.json 中的 bridge.token
+    server: BRIDGE_CONFIG.server || 'http://127.0.0.1:19422',
+    site: BRIDGE_CONFIG.site || 'douyin.com',
+    token: BRIDGE_CONFIG.token || '',
     reconnectDelay: 2000,
+    managedPoll: BRIDGE_CONFIG.managedPoll === true,
   };
 
   let connected = false;
   let registered = false;
+  let clientId = '';
   let retryCount = 0;          // 连续重试次数（指数退避用）
   let pollFailCount = 0;       // 连续 poll 失败次数
 
@@ -58,6 +61,12 @@
           }),
         });
         if (r.status === 200) {
+          try {
+            var connectPayload = JSON.parse(r.responseText || '{}');
+            clientId = connectPayload.id || '';
+          } catch (e) {
+            clientId = '';
+          }
           registered = true;
           connected = true;
           retryCount = 0; // 成功后重置
@@ -80,7 +89,9 @@
   async function poll() {
     if (!registered) return;
     try {
-      var r = await gmFetch(CONFIG.server + '/api/poll?site=' + CONFIG.site, { method: 'GET' });
+      var pollUrl = CONFIG.server + '/api/poll?site=' + encodeURIComponent(CONFIG.site);
+      if (clientId) pollUrl += '&connId=' + encodeURIComponent(clientId);
+      var r = await gmFetch(pollUrl, { method: 'GET' });
       if (r.status !== 200) throw new Error('status ' + r.status);
       var msg = JSON.parse(r.responseText);
 
@@ -861,6 +872,82 @@ var _DM_HELPERS = (function() {
   var BRIDGE_CODE = (function () {/*
 var PAGE_LOAD_TIME = Date.now();
 function getCookie(name) { var match = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/([\.$?*|{}\(\)\[\]\\+/^])/g, '\\$1') + '=([^;]*)')); return match ? decodeURIComponent(match[1]) : ''; }
+function plainHeaders(headers){
+  var out = {};
+  if (!headers) return out;
+  if (typeof Headers !== 'undefined' && headers instanceof Headers) {
+    headers.forEach(function(value, key){ out[key] = value; });
+    return out;
+  }
+  for (var key in headers) {
+    if (Object.prototype.hasOwnProperty.call(headers, key)) out[key] = headers[key];
+  }
+  return out;
+}
+function parseJsonResponse(label, text, ct, readOnly, attempt){
+  if (!text || !String(text).trim()) {
+    return { retry: Boolean(readOnly && attempt === 1), error: '['+label+'] 服务器返回空响应 (HTTP 200, content-type: ' + ct + ') — 可能被限流或登录态失效' };
+  }
+  try {
+    return {
+      value: JSON.parse(text, function(k, v) {
+        return (typeof v === 'number' && Number.isInteger(v) && !Number.isSafeInteger(v)) ? String(v) : v;
+      })
+    };
+  } catch (parseErr) {
+    var snippet2 = text.length > 200 ? text.substring(0,200) + '...' : text;
+    var isHtml = /^\s*</.test(text) || /text\/html/i.test(ct);
+    var hint = isHtml ? '抖音返回了 HTML 页面（可能登录态失效/被风控/账号校验中），请刷新 douyin.com 并重新登录' : '响应不是合法 JSON';
+    return {
+      retry: Boolean(readOnly && attempt === 1),
+      error: '['+label+'] '+hint+' (content-type: ' + ct + '): ' + snippet2
+    };
+  }
+}
+function bridgeProxyFetchJson(label, url, init, readOnly, attempt){
+  return new Promise(function(resolve, reject){
+    if (typeof GM_xmlhttpRequest !== 'function') {
+      reject(new Error('['+label+'] 页面 fetch 失败，且主进程代理不可用'));
+      return;
+    }
+    var headers = plainHeaders(init && init.headers);
+    headers.Accept = headers.Accept || 'application/json, text/plain, */*';
+    headers['X-Requested-With'] = headers['X-Requested-With'] || 'XMLHttpRequest';
+    headers.Cookie = document.cookie || '';
+    headers.Referer = location.href;
+    GM_xmlhttpRequest({
+      method: (init && init.method) || 'GET',
+      url: new URL(url, location.origin).href,
+      headers: headers,
+      data: (init && (init.body || init.data)) || null,
+      timeout: 35000,
+      onload: function(resp){
+        var status = resp.status || 0;
+        var ct = '';
+        try {
+          var matched = String(resp.responseHeaders || '').match(/content-type:\s*([^\r\n]+)/i);
+          ct = matched ? matched[1] : '';
+        } catch(e) {}
+        var text = resp.responseText || '';
+        if (status < 200 || status >= 300) {
+          var snippet = text.length > 200 ? text.substring(0,200) + '...' : text;
+          reject(new Error('['+label+'] HTTP ' + status + ' (' + ct + '): ' + snippet));
+          return;
+        }
+        var parsed = parseJsonResponse(label, text, ct, readOnly, attempt);
+        if (parsed.retry) {
+          resolve({ retry: true });
+        } else if (parsed.error) {
+          reject(new Error(parsed.error));
+        } else {
+          resolve({ value: parsed.value });
+        }
+      },
+      onerror: function(err){ reject(new Error('['+label+'] 主进程代理请求失败: ' + ((err && err.message) || err || 'unknown'))); },
+      ontimeout: function(){ reject(new Error('['+label+'] 主进程代理请求超时')); }
+    });
+  });
+}
 // 统一 fetch+JSON 解析：失败时抛出含状态码/Content-Type/响应前 200 字的友好错误。
 // readOnly=true 的请求在非 JSON 响应时自动重试 1 次（间隔 1s），写操作绝不重试。
 async function bridgeFetchJson(label, url, init, readOnly){
@@ -873,7 +960,16 @@ async function bridgeFetchJson(label, url, init, readOnly){
       ct = (r.headers && r.headers.get) ? (r.headers.get('content-type') || '') : '';
       text = await r.text();
     } catch (netErr) {
-      if (readOnly && attempt === 1) { await new Promise(function(res){setTimeout(res,1000);}); continue; }
+      if (readOnly) {
+        try {
+          var proxied = await bridgeProxyFetchJson(label, url, init || {}, readOnly, attempt);
+          if (proxied.retry && attempt === 1) { await new Promise(function(res){setTimeout(res,1000);}); continue; }
+          return proxied.value;
+        } catch (proxyErr) {
+          if (attempt === 1) { await new Promise(function(res){setTimeout(res,1000);}); continue; }
+          throw proxyErr;
+        }
+      }
       throw new Error('['+label+'] 网络请求失败: ' + (netErr && netErr.message ? netErr.message : netErr));
     }
     if (!r.ok) {
@@ -881,24 +977,10 @@ async function bridgeFetchJson(label, url, init, readOnly){
       var snippet = text.length > 200 ? text.substring(0,200) + '...' : text;
       throw new Error('['+label+'] HTTP ' + r.status + ' (' + ct + '): ' + snippet);
     }
-    // 空响应（抖音偶发，常见于被限流）
-    if (!text || !text.trim()) {
-      if (readOnly && attempt === 1) { await new Promise(function(res){setTimeout(res,1000);}); continue; }
-      throw new Error('['+label+'] 服务器返回空响应 (HTTP 200, content-type: ' + ct + ') — 可能被限流或登录态失效');
-    }
-    try {
-      // reviver：防御 19 位 cid/aweme_id/uid 若以 JSON number 返回时精度丢失，转字符串
-      return JSON.parse(text, function(k, v) {
-        return (typeof v === 'number' && Number.isInteger(v) && !Number.isSafeInteger(v)) ? String(v) : v;
-      });
-    } catch (parseErr) {
-      // 非 JSON：通常是 HTML 风控/登录页
-      var snippet2 = text.length > 200 ? text.substring(0,200) + '...' : text;
-      var isHtml = /^\s*</.test(text) || /text\/html/i.test(ct);
-      var hint = isHtml ? '抖音返回了 HTML 页面（可能登录态失效/被风控/账号校验中），请刷新 douyin.com 并重新登录' : '响应不是合法 JSON';
-      if (readOnly && attempt === 1) { await new Promise(function(res){setTimeout(res,1000);}); continue; }
-      throw new Error('['+label+'] '+hint+' (content-type: ' + ct + '): ' + snippet2);
-    }
+    var parsed = parseJsonResponse(label, text, ct, readOnly, attempt);
+    if (parsed.retry) { await new Promise(function(res){setTimeout(res,1000);}); continue; }
+    if (parsed.error) throw new Error(parsed.error);
+    return parsed.value;
   }
 }
 window.__bridge = {
@@ -1094,12 +1176,13 @@ console.log('[Bridge:Douyin] __bridge API ready');
   // 注入到页面上下文（用页面的 fetch/cookie，不用 sandbox 的）
   unsafeWindow.eval(BRIDGE_CODE);
 
-  // ── Auto-connect DM WebSocket (3s delay) ──
-  setTimeout(function() {
-    try { (0, unsafeWindow.eval)('if(window.__bridge&&window.__bridge.connectDMWS)window.__bridge.connectDMWS();'); } catch(e) {}
-  }, 3000);
+  // DM WebSocket 只在显式调用私信相关 API 时连接；登录和普通评论任务阶段不自动连接。
   // ── 启动轮询 ──
-  connect();
+  if (!CONFIG.managedPoll) {
+    connect();
+  } else {
+    console.log('[Bridge:Douyin] Polling is managed by Electron');
+  }
 
   console.log('[Bridge:Douyin] Ready — connected to ' + CONFIG.server);
 })();
