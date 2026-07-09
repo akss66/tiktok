@@ -68,7 +68,7 @@ export async function listSearchSessions(filters) {
 }
 
 export async function createSearchSession(input) {
-  await ensureBrowserBridge();
+  await ensureAccountBrowserBridge(input?.accountId);
   return requireBridge().createSearchSession(input);
 }
 
@@ -214,6 +214,19 @@ export async function ensureBrowserBridge() {
 
 export async function runBridgeSelfTest() {
   return requireBridge().runBridgeSelfTest();
+}
+
+export async function ensureAccountBrowserBridge(accountId) {
+  try {
+    return await ensureBrowserBridge();
+  } catch (firstError) {
+    if (!accountId) throw firstError;
+    const accounts = await listAccounts();
+    const account = accounts.find((item) => item.id === accountId);
+    if (!account) throw firstError;
+    await openAccountBrowser(account);
+    return ensureBrowserBridge();
+  }
 }
 
 export async function resetAccountBrowser(account) {

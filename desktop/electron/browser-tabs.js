@@ -534,7 +534,12 @@ async function waitForBridgePollClient(timeoutMs = 7000) {
     try {
       lastStatus = await bridgeJson(config, '/api/status');
       const conns = lastStatus?.connections?.[config.site] || [];
-      if (Array.isArray(conns) && conns.some((conn) => isFreshBridgeConnection(conn) && isRealBridgeBrowser(conn))) {
+      const waiters = Number(lastStatus?.pollWaiters?.[config.site] || 0);
+      if (
+        waiters > 0
+        && Array.isArray(conns)
+        && conns.some((conn) => isFreshBridgeConnection(conn) && isRealBridgeBrowser(conn))
+      ) {
         return { ok: true };
       }
     } catch (error) {
