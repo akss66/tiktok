@@ -2,35 +2,69 @@ import { useEffect, useState } from 'react';
 import {
   createAccount,
   deleteAccount,
+  getDmSettings,
   listAccounts,
+  listDmMonitorStates,
   openAccountBrowser,
   openCleanLoginBrowser,
   openEdgeAccountBrowser,
   resetAccountBrowser,
   updateAccount,
+  updateDmMonitorState,
 } from '../api.js';
 import { PageHeader } from './PageHeader.jsx';
+import { SelectMenu } from './SelectMenu.jsx';
 
 const STATUS_OPTIONS = [
   { value: 'login_required', label: '需登录' },
+  { value: 'enabled', label: '已登录' },
   { value: 'online', label: '已登录' },
   { value: 'offline', label: '离线' },
   { value: 'disabled', label: '停用' },
 ];
 
-function statusLabel(value) {
-  return STATUS_OPTIONS.find((item) => item.value === value)?.label || value;
+const DM_REPLY_MODE_OPTIONS = [
+  { value: 'manual', label: '人工审核' },
+  { value: 'tiered', label: '分级自动' },
+  { value: 'automatic', label: '自动回复' },
+];
+
+const MONITOR_STATUS_LABELS = {
+  idle: '待机',
+  running: '监听中',
+  backoff: '稍后重试',
+  login_required: '需登录',
+  disabled: '已停用',
+  stopped: '已停止',
+  enabled: '已启用',
+  online: '在线',
+};
+
+function historyStatusText(status) {
+  return {
+    available: '历史同步能力可用',
+    realtime_only: '仅实时：只保证监听期间收到的消息',
+    syncing: '正在同步历史消息',
+    complete: '历史消息已同步',
+    incomplete: '历史补拉不完整：只保证监听期间收到的消息',
+  }[status] || '仅实时：只保证监听期间收到的消息';
 }
 
-function statusTone(value) {
-  if (value === 'online') return 'success';
-  if (value === 'login_required') return 'warning';
-  if (value === 'disabled') return 'neutral';
-  return 'danger';
+function effectiveMonitorEnabled(state, dmSettings) {
+  return state?.settingSource === 'explicit'
+    ? state.enabled === true
+    : dmSettings?.monitor_after_login === true;
+}
+
+function effectiveReplyMode(state, dmSettings) {
+  return state?.replyModeOverride || dmSettings?.reply_mode || 'manual';
 }
 
 export function AccountsPage({ onBrowserOpened }) {
   const [accounts, setAccounts] = useState([]);
+  const [monitorStates, setMonitorStates] = useState({});
+  const [dmSettings, setDmSettings] = useState({ monitor_after_login: false, reply_mode: 'manual' });
+  const [monitorSaving, setMonitorSaving] = useState({});
   const [form, setForm] = useState({ name: '', group: '', notes: '' });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -39,7 +73,14 @@ export function AccountsPage({ onBrowserOpened }) {
     setLoading(true);
     setError('');
     try {
-      setAccounts(await listAccounts());
+      const [nextAccounts, nextMonitorStates, nextDmSettings] = await Promise.all([
+        listAccounts(),
+        listDmMonitorStates(),
+        getDmSettings(),
+      ]);
+      setAccounts(nextAccounts);
+      setMonitorStates(Object.fromEntries(nextMonitorStates.map((state) => [state.accountId, state])));
+      setDmSettings(nextDmSettings);
     } catch (err) {
       setError(err.message || '账号列表加载失败');
     } finally {
@@ -72,6 +113,19 @@ export function AccountsPage({ onBrowserOpened }) {
       setAccounts((items) => items.map((item) => (item.id === updated.id ? updated : item)));
     } catch (err) {
       setError(err.message || '账号更新失败');
+    }
+  }
+
+  async function handleMonitorPatch(account, patch) {
+    setError('');
+    setMonitorSaving((current) => ({ ...current, [account.id]: true }));
+    try {
+      const updated = await updateDmMonitorState(account.id, patch);
+      setMonitorStates((current) => ({ ...current, [account.id]: updated }));
+    } catch (err) {
+      setError(err.message || '私信监听设置更新失败');
+    } finally {
+      setMonitorSaving((current) => ({ ...current, [account.id]: false }));
     }
   }
 
@@ -188,7 +242,7 @@ export function AccountsPage({ onBrowserOpened }) {
   }, []);
 
   return (
-    <section className="panel">
+    <section className="panel panel-wide">
       <PageHeader
         title="账号"
         description="每个账号使用独立浏览器信息；打开后可隐藏，登录状态不会丢。"
@@ -201,7 +255,6 @@ export function AccountsPage({ onBrowserOpened }) {
           <input
             value={form.name}
             onChange={(event) => setForm((next) => ({ ...next, name: event.target.value }))}
-            placeholder="账号A"
           />
         </label>
         <label>
@@ -209,7 +262,6 @@ export function AccountsPage({ onBrowserOpened }) {
           <input
             value={form.group}
             onChange={(event) => setForm((next) => ({ ...next, group: event.target.value }))}
-            placeholder="默认分组"
           />
         </label>
         <label>
@@ -217,16 +269,24 @@ export function AccountsPage({ onBrowserOpened }) {
           <input
             value={form.notes}
             onChange={(event) => setForm((next) => ({ ...next, notes: event.target.value }))}
-            placeholder="用途、负责人或代理说明"
           />
         </label>
-        <button type="submit" disabled={loading}>新建账号</button>
+        <button type="submit" className="primary-button" disabled={loading}>新建账号</button>
       </form>
 
       {error ? <p className="inline-error" role="alert">{error}</p> : null}
 
       <div className="table-wrap">
-        <table>
+        <table className="accounts-table">
+          <colgroup>
+            <col className="account-col-name" />
+            <col className="account-col-group" />
+            <col className="account-col-status" />
+            <col className="account-col-profile" />
+            <col className="account-col-seen" />
+            <col className="account-col-notes" />
+            <col className="account-col-actions" />
+          </colgroup>
           <thead>
             <tr>
               <th>名称</th>
@@ -241,7 +301,7 @@ export function AccountsPage({ onBrowserOpened }) {
           <tbody>
             {accounts.map((account) => (
               <tr key={account.id}>
-                <td>{account.name}</td>
+                <td className="account-name-cell" title={account.name}>{account.name}</td>
                 <td>
                   <input
                     className="table-input"
@@ -251,7 +311,8 @@ export function AccountsPage({ onBrowserOpened }) {
                   />
                 </td>
                 <td>
-                  <select
+                  <SelectMenu
+                    className={`account-status-select status-${account.status}`}
                     value={account.status}
                     onChange={(event) => handlePatch(account, { status: event.target.value })}
                     aria-label={`${account.name} 状态`}
@@ -259,11 +320,10 @@ export function AccountsPage({ onBrowserOpened }) {
                     {STATUS_OPTIONS.map((option) => (
                       <option key={option.value} value={option.value}>{option.label}</option>
                     ))}
-                  </select>
-                  <span className={`status-badge ${statusTone(account.status)}`}>{statusLabel(account.status)}</span>
+                  </SelectMenu>
                 </td>
-                <td><code>{account.profileKey}</code></td>
-                <td>{account.lastSeenAt || '-'}</td>
+                <td><code className="account-profile-code" title={account.profileKey}>{account.profileKey}</code></td>
+                <td className="account-seen-cell" title={account.lastSeenAt || '-'}>{account.lastSeenAt || '-'}</td>
                 <td>
                   <input
                     className="table-input"
@@ -273,25 +333,102 @@ export function AccountsPage({ onBrowserOpened }) {
                   />
                 </td>
                 <td>
-                  <div className="account-actions">
-                    <button type="button" className="primary-action" onClick={() => handleOpenBrowser(account)}>打开浏览器</button>
-                    <select
-                      className="action-select"
-                      defaultValue=""
-                      disabled={loading}
-                      aria-label={`${account.name} 更多操作`}
-                      onChange={(event) => {
-                        const action = event.target.value;
-                        event.target.value = '';
-                        handleMoreAction(account, action);
-                      }}
-                    >
-                      <option value="" disabled>更多操作</option>
-                      <option value="edge">Edge 备用登录</option>
-                      <option value="diagnose">登录诊断</option>
-                      <option value="reset">重置环境</option>
-                      <option value="delete">删除账号</option>
-                    </select>
+                  <div className="account-action-stack">
+                    <div className="account-actions">
+                      <button type="button" className="primary-action" onClick={() => handleOpenBrowser(account)}>打开浏览器</button>
+                      <SelectMenu
+                        className="action-select"
+                        defaultValue=""
+                        disabled={loading}
+                        aria-label={`${account.name} 更多操作`}
+                        onChange={(event) => {
+                          const action = event.target.value;
+                          event.target.value = '';
+                          handleMoreAction(account, action);
+                        }}
+                      >
+                        <option value="" disabled>更多操作</option>
+                        <option value="edge">Edge 备用登录</option>
+                        <option value="diagnose">登录诊断</option>
+                        <option value="reset">重置环境</option>
+                        <option value="delete">删除账号</option>
+                      </SelectMenu>
+                    </div>
+                    {(() => {
+                      const monitorState = monitorStates[account.id] || {
+                        accountId: account.id,
+                        enabled: false,
+                        settingSource: 'inherited',
+                        replyModeOverride: null,
+                        status: 'idle',
+                      };
+                      const enabled = effectiveMonitorEnabled(monitorState, dmSettings);
+                      const inherited = monitorState.settingSource !== 'explicit';
+                      const saving = Boolean(monitorSaving[account.id]);
+                      const mode = effectiveReplyMode(monitorState, dmSettings);
+                      return (
+                        <div className="account-dm-control">
+                          <div className="account-dm-summary">
+                            <span className={`monitor-state-dot ${enabled ? 'enabled' : 'disabled'}`} aria-hidden="true" />
+                            <span>
+                              <strong>私信监听</strong>
+                              <small>
+                                {inherited ? '继承全局' : '单独设置'} · {enabled ? '已开启' : '已停用'} · {MONITOR_STATUS_LABELS[monitorState.status] || '待机'}
+                              </small>
+                              <small className="account-history-limitation">
+                                {historyStatusText(monitorState.historyStatus)}
+                              </small>
+                            </span>
+                          </div>
+                          <div className="account-dm-actions">
+                            <button
+                              type="button"
+                              className="compact-toggle"
+                              aria-label={`${account.name} ${enabled ? '停用' : '启用'}私信监听`}
+                              aria-pressed={enabled}
+                              disabled={saving}
+                              onClick={() => handleMonitorPatch(account, {
+                                enabled: !enabled,
+                                settingSource: 'explicit',
+                                replyModeOverride: monitorState.replyModeOverride ?? null,
+                              })}
+                            >
+                              <span aria-hidden="true" />
+                              {enabled ? '监听已开' : '监听已停'}
+                            </button>
+                            <SelectMenu
+                              className="account-dm-mode"
+                              value={monitorState.replyModeOverride || ''}
+                              disabled={saving}
+                              aria-label={`${account.name} 私信回复模式`}
+                              onChange={(event) => handleMonitorPatch(account, {
+                                enabled,
+                                settingSource: 'explicit',
+                                replyModeOverride: event.target.value || null,
+                              })}
+                            >
+                              <option value="">跟随全局（{DM_REPLY_MODE_OPTIONS.find((item) => item.value === mode)?.label || '人工审核'}）</option>
+                              {DM_REPLY_MODE_OPTIONS.map((option) => (
+                                <option key={option.value} value={option.value}>{option.label}</option>
+                              ))}
+                            </SelectMenu>
+                            <button
+                              type="button"
+                              className="text-action"
+                              aria-label={`${account.name} 使用全局默认`}
+                              disabled={saving || inherited}
+                              onClick={() => handleMonitorPatch(account, {
+                                enabled: null,
+                                settingSource: 'inherited',
+                                replyModeOverride: null,
+                              })}
+                            >
+                              使用全局
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 </td>
               </tr>

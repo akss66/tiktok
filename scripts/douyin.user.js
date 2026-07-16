@@ -379,7 +379,7 @@ var _DM_PROTO = (function() {
       encodeIntField(5, opts.refer || 3),                               // refer
       encodeIntField(6, opts.inbox_type || 0),                          // inbox_type
       encodeStringField(7, opts.build_number || '5fa6ff1:Detached: 5fa6ff1111fd53aafc4c753505d3c93daad74d27'),
-      encodeMessageField(8, bodyBytes),                                  // body
+      encodeMessageField(8, encodeMessageField(bodyFieldNum, bodyBytes)), // body
       encodeStringField(9, opts.device_id || '0'),                      // device_id
       encodeStringField(11, opts.device_platform || 'douyin_pc'),       // device_platform
       encodeMapStringStringField(15, opts.headersObj || {
@@ -421,7 +421,7 @@ var _DM_PROTO = (function() {
     var bytes = [].concat(
       encodeStringField(1, opts.conversation_id),
       encodeIntField(2, opts.conversation_type || 1),
-      encodeIntField(3, opts.conversation_short_id || 0),
+      encodeUint64Field(3, opts.conversation_short_id || 0),
       encodeStringField(4, content),
       extBytes,
       encodeIntField(6, opts.message_type || 7),
@@ -442,6 +442,16 @@ var _DM_PROTO = (function() {
       encodeRepeatedInt64(2, opts.participants || [])
     );
     return bytes;
+  }
+
+  // Encode GetConversationInfoListV2RequestBody.
+  function encodeGetConversationInfoListBody(opts) {
+    var dataBytes = [].concat(
+      encodeStringField(1, opts.conversation_id || ''),
+      encodeUint64Field(2, opts.conversation_short_id || 0),
+      encodeIntField(3, opts.conversation_type || 1)
+    );
+    return encodeMessageField(1, dataBytes);
   }
 
   // 解码 PushFrame (WebSocket 接收)
@@ -530,6 +540,8 @@ var _DM_PROTO = (function() {
 
       switch (f.fieldNum) {
         case 1: result.conversation_id = utf8ToString(f.value); break;
+        case 2: result.conversation_type = Number(f.value); break;
+        case 3: result.server_message_id = String(f.value); break;
         case 4: result.index_in_conversation = String(f.value); break;
         case 5: result.conversation_short_id = String(f.value); break;
         case 6: result.message_type = Number(f.value); break;
@@ -579,6 +591,7 @@ var _DM_PROTO = (function() {
     encodeRequest: encodeRequest,
     encodeSendMessageBody: encodeSendMessageBody,
     encodeCreateConversationBody: encodeCreateConversationBody,
+    encodeGetConversationInfoListBody: encodeGetConversationInfoListBody,
     decodePushFrame: decodePushFrame,
     decodeResponse: decodeResponse,
     bytesToArray: function(bytes) { return new Uint8Array(bytes); }
@@ -948,6 +961,28 @@ function bridgeProxyFetchJson(label, url, init, readOnly, attempt){
     });
   });
 }
+function fetchWithBridgeTimeout(url, init, timeoutMs){
+  var options = Object.assign({}, init || {});
+  if (typeof AbortController === 'function') {
+    var controller = new AbortController();
+    var originalSignal = options.signal;
+    var timer = setTimeout(function(){ controller.abort(); }, timeoutMs);
+    if (originalSignal) {
+      if (originalSignal.aborted) controller.abort();
+      else if (typeof originalSignal.addEventListener === 'function') {
+        originalSignal.addEventListener('abort', function(){ controller.abort(); }, { once: true });
+      }
+    }
+    options.signal = controller.signal;
+    return fetch(url, options).finally(function(){ clearTimeout(timer); });
+  }
+  return Promise.race([
+    fetch(url, options),
+    new Promise(function(_resolve, reject){
+      setTimeout(function(){ reject(new Error('fetch timeout after ' + timeoutMs + 'ms')); }, timeoutMs);
+    })
+  ]);
+}
 // 统一 fetch+JSON 解析：失败时抛出含状态码/Content-Type/响应前 200 字的友好错误。
 // readOnly=true 的请求在非 JSON 响应时自动重试 1 次（间隔 1s），写操作绝不重试。
 async function bridgeFetchJson(label, url, init, readOnly){
@@ -956,7 +991,7 @@ async function bridgeFetchJson(label, url, init, readOnly){
     attempt++;
     var r, text, ct;
     try {
-      r = await fetch(url, init || {});
+      r = await fetchWithBridgeTimeout(url, init || {}, readOnly ? 12000 : 35000);
       ct = (r.headers && r.headers.get) ? (r.headers.get('content-type') || '') : '';
       text = await r.text();
     } catch (netErr) {
@@ -982,6 +1017,38 @@ async function bridgeFetchJson(label, url, init, readOnly){
     if (parsed.error) throw new Error(parsed.error);
     return parsed.value;
   }
+}
+var DM_WS_STATE = {
+  status: 'disconnected',
+  connected: false,
+  readyState: null,
+  queueLength: 0,
+  reconnectRecommended: false,
+  manualDisconnect: false,
+  lastError: '',
+  lastEventAt: '',
+  lastCloseCode: 0,
+  lastCloseReason: '',
+};
+function setDMConnectionState(patch){
+  DM_WS_STATE = Object.assign({}, DM_WS_STATE, patch || {});
+  DM_WS_STATE.connected = DM_WS_STATE.status === 'connected';
+  DM_WS_STATE.queueLength = (window.__dmQueue || []).length;
+  if (!DM_WS_STATE.lastEventAt) DM_WS_STATE.lastEventAt = new Date().toISOString();
+  return DM_WS_STATE;
+}
+function getSerializableDMConnectionState(){
+  return {
+    status: String(DM_WS_STATE.status || 'disconnected'),
+    connected: DM_WS_STATE.status === 'connected',
+    readyState: typeof DM_WS_STATE.readyState === 'number' ? DM_WS_STATE.readyState : null,
+    queueLength: (window.__dmQueue || []).length,
+    reconnectRecommended: DM_WS_STATE.reconnectRecommended === true,
+    lastError: String(DM_WS_STATE.lastError || ''),
+    lastEventAt: String(DM_WS_STATE.lastEventAt || ''),
+    lastCloseCode: Number(DM_WS_STATE.lastCloseCode || 0),
+    lastCloseReason: String(DM_WS_STATE.lastCloseReason || '')
+  };
 }
 window.__bridge = {
   _q: function() {
@@ -1089,7 +1156,31 @@ window.__bridge = {
       if(cl.length>0)return{conversation_id:cl[0].conversation_id,
         conversation_short_id:String(cl[0].conversation_short_id),ticket:cl[0].ticket};
     }
-    throw new Error('[createConversation] 未找到会话: '+JSON.stringify(result).substring(0,200));
+    var safeResult=JSON.stringify(result,function(key,val){return typeof val==='bigint'?val.toString():val;});
+    throw new Error('[createConversation] 未找到会话: '+safeResult.substring(0,500));
+  },
+  getConversationInfo: async function(conversationId,conversationShortId){
+    var keys=_DM_HELPERS.getDMKeys();
+    var bodyBytes=_DM_PROTO.encodeGetConversationInfoListBody({
+      conversation_id:String(conversationId||''),
+      conversation_short_id:String(conversationShortId||'0'),
+      conversation_type:1
+    });
+    var requestBytes=_DM_PROTO.encodeRequest({cmd:610,token:keys.ticket,ts_sign:keys.ts_sign,
+      sdk_cert:btoa(keys.client_cert||''),reuqest_sign:'',bodyBytes:bodyBytes});
+    var resp=await fetch('https://imapi.douyin.com/v2/conversation/get_info_list',{
+      method:'POST',headers:{'Content-Type':'application/x-protobuf','Accept':'application/x-protobuf'},
+      body:_DM_PROTO.bytesToArray(requestBytes),credentials:'include'});
+    if(!resp.ok){var t=await resp.text();throw new Error('[getConversationInfo] HTTP '+resp.status+': '+t.substring(0,200));}
+    var respBytes=new Uint8Array(await resp.arrayBuffer());
+    var result=_DM_PROTO.decodeResponse(respBytes);
+    if(result.body&&result.body.get_conversation_info_list_v2_response_body){
+      var cl=result.body.get_conversation_info_list_v2_response_body.conversation_info_list||[];
+      if(cl.length>0&&cl[0].ticket)return{conversation_id:cl[0].conversation_id,
+        conversation_short_id:String(cl[0].conversation_short_id),ticket:cl[0].ticket};
+    }
+    var safeResult=JSON.stringify(result,function(key,val){return typeof val==='bigint'?val.toString():val;});
+    throw new Error('[getConversationInfo] 未找到会话: '+safeResult.substring(0,500));
   },
   sendDM: async function(convId,text){
     var parts=convId.split('|');
@@ -1111,55 +1202,222 @@ window.__bridge = {
     var respBytes=new Uint8Array(await resp.arrayBuffer());
     return _DM_PROTO.decodeResponse(respBytes);
   },
-  connectDMWS: function(){
-    if(window.__dmWs&&window.__dmWs.readyState===WebSocket.OPEN)return{status:'connected'};
-    // 获取真实 device_id: 优先取 cookie 中的 uid，然后尝试多种 localStorage key
-    var deviceId=getCookie('uid')||getCookie('UIFID')||
-      localStorage.getItem('d_device_id')||localStorage.getItem('device_id')||
-      localStorage.getItem('user_unique_id')||'0';
-    if(deviceId==='0'){
-      try{var s=localStorage.getItem('bd_ticket_guard_client_data');if(s){var j=JSON.parse(s);deviceId=j.user_id||'0';}}catch(e){}
+  getDMHistoryCapabilities: function(){
+    return {
+      supported:false,
+      reason:'当前页面能力未验证，暂仅支持实时监听'
+    };
+  },
+  syncDMHistory: async function(){
+    return {
+      supported:false,
+      messages:[],
+      next_cursor:null,
+      has_more:false,
+      reason:'当前页面能力未验证，暂仅支持实时监听'
+    };
+  },
+  connectDMWS: async function(){
+    window.__dmQueue=window.__dmQueue||[];
+    if(window.__dmWs&&window.__dmWs.readyState===WebSocket.OPEN){
+      setDMConnectionState({
+        status:'connected',
+        readyState: window.__dmWs.readyState,
+        reconnectRecommended:false,
+        manualDisconnect:false,
+        lastError:'',
+        lastEventAt:new Date().toISOString()
+      });
+      return getSerializableDMConnectionState();
     }
-    // 匹配抖音原生 IM WebSocket 参数
-    var accessKey=_DM_HELPERS.computeAccessKey(deviceId,'9','e1bd35ec9db7b8d846de66ed140b1ad9');
-    var p=new URLSearchParams({aid:'6383',device_platform:'web',fpid:'9',
-      version_code:'fws_1.0.0',device_id:deviceId,access_key:accessKey,
-      xsack:'0',xaack:'0',xsqos:'0',qos_sdk_version:'2'});
+    if(window.__dmWs&&window.__dmWs.readyState===WebSocket.CONNECTING){
+      setDMConnectionState({
+        status:'connecting',
+        readyState: window.__dmWs.readyState,
+        reconnectRecommended:false,
+        manualDisconnect:false,
+        lastEventAt:new Date().toISOString()
+      });
+      return getSerializableDMConnectionState();
+    }
     try{
+      var deviceId=getCookie('uid')||getCookie('UIFID')||
+        localStorage.getItem('d_device_id')||localStorage.getItem('device_id')||
+        localStorage.getItem('user_unique_id')||'0';
+      if(deviceId==='0'){
+        try{
+          var storedClientData=localStorage.getItem('bd_ticket_guard_client_data');
+          if(storedClientData){
+            var parsedClientData=JSON.parse(storedClientData);
+            deviceId=parsedClientData.user_id||'0';
+          }
+        }catch(_error){}
+      }
+      var accessKey=_DM_HELPERS.computeAccessKey(deviceId,'9','e1bd35ec9db7b8d846de66ed140b1ad9');
+      var p=new URLSearchParams({
+        aid:'6383',device_platform:'web',fpid:'9',version_code:'fws_1.0.0',
+        device_id:deviceId,access_key:accessKey,xsack:'0',xaack:'0',xsqos:'0',qos_sdk_version:'2'
+      });
       var ws=new WebSocket('wss://frontier-im.douyin.com/ws/v2?'+p.toString());
+      window.__dmWs=ws;
+      setDMConnectionState({
+        status:'connecting',
+        readyState: ws.readyState,
+        reconnectRecommended:false,
+        manualDisconnect:false,
+        lastError:'',
+        lastCloseCode:0,
+        lastCloseReason:'',
+        lastEventAt:new Date().toISOString()
+      });
       ws.binaryType='arraybuffer';
-      ws.onopen=function(){console.log('[DM WS] Connected');window.__dmWs=ws;};
+      ws.onopen=function(){
+        if(window.__dmWs!==ws)return;
+        setDMConnectionState({
+          status:'connected',
+          readyState: ws.readyState,
+          reconnectRecommended:false,
+          manualDisconnect:false,
+          lastError:'',
+          lastEventAt:new Date().toISOString()
+        });
+      };
       ws.onmessage=function(event){
+        if(window.__dmWs!==ws)return;
         try{
           var mbytes=new Uint8Array(event.data);
           var frame=_DM_PROTO.decodePushFrame(mbytes);
           if(frame.payloadType==='pb'&&frame.payload){
             var resp=_DM_PROTO.decodeResponse(frame.payload);
             if(resp.body&&resp.body.new_message_notify){
-              var msg=resp.body.new_message_notify.message;
+              var msg=resp.body.new_message_notify.message||{};
+              var messageIndex=String(msg.index_in_conversation||'');
+              var serverMessageId=String(msg.server_message_id||'');
+              var contentValue=msg.content_parsed||msg.content||'';
+              if(contentValue&&typeof contentValue==='object'){
+                contentValue=typeof contentValue.text==='string'
+                  ? contentValue.text
+                  : JSON.stringify(contentValue);
+              }
               window.__dmQueue=window.__dmQueue||[];
-              window.__dmQueue.push({sender:String(msg.sender),
-                conversation_id:msg.conversation_id,message_type:msg.message_type,
-                content:msg.content_parsed||msg.content,
-                index:String(msg.index_in_conversation),timestamp:Date.now()});
+              window.__dmQueue.push({
+                sender:String(msg.sender||''),
+                conversation_id:String(msg.conversation_id||''),
+                message_type:msg.message_type,
+                content:String(contentValue||''),
+                server_message_id:serverMessageId,
+                message_id:serverMessageId,
+                index_in_conversation:messageIndex,
+                index:messageIndex,
+                timestamp:Date.now()
+              });
+              setDMConnectionState({
+                status:'connected',
+                readyState: ws.readyState,
+                reconnectRecommended:false,
+                manualDisconnect:false,
+                lastError:'',
+                lastEventAt:new Date().toISOString()
+              });
             }
           }
-        }catch(e){console.warn('[DM WS] Decode:',e.message);}
+        }catch(e){
+          if(window.__dmWs!==ws)return;
+          setDMConnectionState({
+            status:'error',
+            readyState: typeof ws.readyState==='number'?ws.readyState:null,
+            reconnectRecommended:true,
+            lastError:String(e&&e.message||e),
+            lastEventAt:new Date().toISOString()
+          });
+        }
       };
-      ws.onclose=function(){console.log('[DM WS] Closed');setTimeout(function(){window.__bridge.connectDMWS();},5000);};
-      ws.onerror=function(){console.warn('[DM WS] Error');};
-      return{status:'connecting'};
-    }catch(e){console.warn('[DM WS] Failed:',e.message);return{status:'error',error:e.message};}
+      ws.onclose=function(event){
+        var manualClose = ws.__manualDisconnect===true
+          || DM_WS_STATE.manualDisconnect===true
+          || (Number((event&&event.code)||0)===1000 && String((event&&event.reason)||'')==='manual_disconnect');
+        if(window.__dmWs!==ws && !(ws.__manualDisconnect===true && window.__dmWs===null))return;
+        if(window.__dmWs===ws)window.__dmWs=null;
+        ws.__manualDisconnect=false;
+        setDMConnectionState({
+          status:'disconnected',
+          readyState: typeof ws.readyState==='number'?ws.readyState:null,
+          reconnectRecommended:!manualClose,
+          manualDisconnect:false,
+          lastError:'',
+          lastCloseCode:Number((event&&event.code)||0),
+          lastCloseReason:String((event&&event.reason)||''),
+          lastEventAt:new Date().toISOString()
+        });
+      };
+      ws.onerror=function(event){
+        if(window.__dmWs!==ws)return;
+        setDMConnectionState({
+          status:'error',
+          readyState: typeof ws.readyState==='number'?ws.readyState:null,
+          reconnectRecommended:true,
+          manualDisconnect:false,
+          lastError:String((event&&event.message)||'WebSocket error'),
+          lastEventAt:new Date().toISOString()
+        });
+      };
+      return getSerializableDMConnectionState();
+    }catch(e){
+      setDMConnectionState({
+        status:'error',
+        readyState:null,
+        reconnectRecommended:true,
+        manualDisconnect:false,
+        lastError:String(e&&e.message||e),
+        lastEventAt:new Date().toISOString()
+      });
+      return getSerializableDMConnectionState();
+    }
+  },
+  getDMConnectionState: function(){
+    return getSerializableDMConnectionState();
+  },
+  disconnectDMWS: function(){
+    var ws=window.__dmWs;
+    if(ws){
+      ws.__manualDisconnect=true;
+      window.__dmWs=null;
+      try{ws.close(1000,'manual_disconnect');}catch(e){}
+    }
+    setDMConnectionState({
+      status:'disconnected',
+      readyState: ws&&typeof ws.readyState==='number'?ws.readyState:null,
+      reconnectRecommended:false,
+      manualDisconnect:true,
+      lastError:'',
+      lastCloseCode:1000,
+      lastCloseReason:'manual_disconnect',
+      lastEventAt:new Date().toISOString()
+    });
+    return getSerializableDMConnectionState();
   },
   pollDMs: async function(timeoutMs){
     var deadline=Date.now()+(timeoutMs||30000);
     window.__dmQueue=window.__dmQueue||[];
-    this.connectDMWS();
+    var state=this.getDMConnectionState();
+    if(state.status!=='connected'&&state.status!=='connecting'){
+      await this.connectDMWS();
+    }
     while(Date.now()<deadline){
-      if(window.__dmQueue.length>0)return{messages:window.__dmQueue.splice(0),has_more:false};
+      if(window.__dmQueue.length>0){
+        setDMConnectionState({
+          status:(window.__dmWs&&window.__dmWs.readyState===WebSocket.OPEN)?'connected':DM_WS_STATE.status,
+          readyState: window.__dmWs&&typeof window.__dmWs.readyState==='number'?window.__dmWs.readyState:null,
+          reconnectRecommended:false,
+          manualDisconnect:false,
+          lastError:'',
+          lastEventAt:new Date().toISOString()
+        });
+        return{messages:window.__dmQueue.splice(0),has_more:false,connection:this.getDMConnectionState()};
+      }
       await new Promise(function(r){setTimeout(r,500);});
     }
-    return{messages:[],has_more:false};
+    return{messages:[],has_more:false,connection:this.getDMConnectionState()};
   },
   getDMs: function(){
     window.__dmQueue=window.__dmQueue||[];

@@ -206,7 +206,7 @@ var _DM_PROTO = (function() {
       encodeIntField(5, opts.refer || 3),                               // refer
       encodeIntField(6, opts.inbox_type || 0),                          // inbox_type
       encodeStringField(7, opts.build_number || '5fa6ff1:Detached: 5fa6ff1111fd53aafc4c753505d3c93daad74d27'),
-      encodeMessageField(8, bodyBytes),                                  // body
+      encodeMessageField(8, encodeMessageField(bodyFieldNum, bodyBytes)), // body
       encodeStringField(9, opts.device_id || '0'),                      // device_id
       encodeStringField(11, opts.device_platform || 'douyin_pc'),       // device_platform
       encodeMapStringStringField(15, opts.headersObj || {
@@ -248,7 +248,7 @@ var _DM_PROTO = (function() {
     var bytes = [].concat(
       encodeStringField(1, opts.conversation_id),
       encodeIntField(2, opts.conversation_type || 1),
-      encodeIntField(3, opts.conversation_short_id || 0),
+      encodeUint64Field(3, opts.conversation_short_id || 0),
       encodeStringField(4, content),
       extBytes,
       encodeIntField(6, opts.message_type || 7),
@@ -269,6 +269,16 @@ var _DM_PROTO = (function() {
       encodeRepeatedInt64(2, opts.participants || [])
     );
     return bytes;
+  }
+
+  // Encode GetConversationInfoListV2RequestBody.
+  function encodeGetConversationInfoListBody(opts) {
+    var dataBytes = [].concat(
+      encodeStringField(1, opts.conversation_id || ''),
+      encodeUint64Field(2, opts.conversation_short_id || 0),
+      encodeIntField(3, opts.conversation_type || 1)
+    );
+    return encodeMessageField(1, dataBytes);
   }
 
   // 解码 PushFrame (WebSocket 接收)
@@ -406,6 +416,7 @@ var _DM_PROTO = (function() {
     encodeRequest: encodeRequest,
     encodeSendMessageBody: encodeSendMessageBody,
     encodeCreateConversationBody: encodeCreateConversationBody,
+    encodeGetConversationInfoListBody: encodeGetConversationInfoListBody,
     decodePushFrame: decodePushFrame,
     decodeResponse: decodeResponse,
     bytesToArray: function(bytes) { return new Uint8Array(bytes); }

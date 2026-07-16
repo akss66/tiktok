@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createTask, listAccounts, listTasks, runTask } from '../api.js';
 import { PageHeader } from './PageHeader.jsx';
+import { SelectMenu } from './SelectMenu.jsx';
 
 const TASK_TYPES = [
   { value: 'search', label: '搜索视频' },
@@ -39,8 +40,8 @@ function defaultForm(overrides = {}) {
     accountId: '',
     type: 'search',
     keyword: '',
-    count: 5,
-    offset: 0,
+    count: '',
+    offset: '',
     awemeId: '',
     commentText: '',
     commentId: '',
@@ -145,6 +146,36 @@ function describeResult(task) {
   return '执行完成';
 }
 
+function SearchResultList({ task }) {
+  const result = task.resultSummary || {};
+  const items = Array.isArray(result.items) ? result.items : [];
+  if (task.type !== 'search' || !items.length) return null;
+
+  return (
+    <div className="task-search-results">
+      <div className="task-search-results-header">
+        <strong>搜索结果</strong>
+        <span>{items.length}/{result.requested || task.input?.count || items.length}</span>
+      </div>
+      <div className="task-search-results-list">
+        {items.map((item, index) => (
+          <article className="task-search-result" key={item.awemeId || `${task.id}-${index}`}>
+            <div>
+              <strong>{item.desc || '未命名视频'}</strong>
+              <p>{item.author || '-'}</p>
+              <code>{item.awemeId}</code>
+            </div>
+            {item.url ? (
+              <a href={item.url} target="_blank" rel="noreferrer">打开</a>
+            ) : null}
+          </article>
+        ))}
+      </div>
+      {result.warning ? <p className="task-result-warning">后续分页未完整返回：{result.warning}</p> : null}
+    </div>
+  );
+}
+
 function TaskTypeFields({ form, setForm }) {
   if (form.type === 'search') {
     return (
@@ -154,7 +185,6 @@ function TaskTypeFields({ form, setForm }) {
           <input
             value={form.keyword}
             onChange={(event) => setForm((next) => ({ ...next, keyword: event.target.value }))}
-            placeholder="例如：美食"
           />
         </label>
         <label>
@@ -179,19 +209,19 @@ function TaskTypeFields({ form, setForm }) {
           <input
             value={form.awemeId}
             onChange={(event) => setForm((next) => ({ ...next, awemeId: event.target.value }))}
-            placeholder="数字 ID、抖音链接或整段分享文案"
           />
         </label>
         <label>
           <span>动作</span>
-          <select
+          <SelectMenu
             value={form.likeAction}
             onChange={(event) => setForm((next) => ({ ...next, likeAction: event.target.value }))}
+            aria-label="动作"
           >
             {LIKE_ACTIONS.map((option) => (
               <option key={option.value} value={option.value}>{option.label}</option>
             ))}
-          </select>
+          </SelectMenu>
         </label>
       </>
     );
@@ -205,7 +235,6 @@ function TaskTypeFields({ form, setForm }) {
           <input
             value={form.awemeId}
             onChange={(event) => setForm((next) => ({ ...next, awemeId: event.target.value }))}
-            placeholder="数字 ID、抖音链接或整段分享文案"
           />
         </label>
         <label className="col-span-2">
@@ -214,7 +243,6 @@ function TaskTypeFields({ form, setForm }) {
             value={form.commentText}
             onChange={(event) => setForm((next) => ({ ...next, commentText: event.target.value }))}
             rows={2}
-            placeholder="要发布的评论"
           />
         </label>
         <label>
@@ -222,7 +250,6 @@ function TaskTypeFields({ form, setForm }) {
           <input
             value={form.replyToCommentId}
             onChange={(event) => setForm((next) => ({ ...next, replyToCommentId: event.target.value }))}
-            placeholder="可选"
           />
         </label>
       </>
@@ -236,7 +263,6 @@ function TaskTypeFields({ form, setForm }) {
         <input
           value={form.commentId}
           onChange={(event) => setForm((next) => ({ ...next, commentId: event.target.value }))}
-          placeholder="commentId"
         />
       </label>
     );
@@ -250,7 +276,6 @@ function TaskTypeFields({ form, setForm }) {
           value={form.commentText}
           onChange={(event) => setForm((next) => ({ ...next, commentText: event.target.value }))}
           rows={3}
-          placeholder="需要生成回复的用户评论"
         />
       </label>
       <label>
@@ -258,7 +283,6 @@ function TaskTypeFields({ form, setForm }) {
         <input
           value={form.suggestStrategy}
           onChange={(event) => setForm((next) => ({ ...next, suggestStrategy: event.target.value }))}
-          placeholder="可选，例如：热情、简洁"
         />
       </label>
       <label>
@@ -266,7 +290,6 @@ function TaskTypeFields({ form, setForm }) {
         <input
           value={form.suggestAwemeId}
           onChange={(event) => setForm((next) => ({ ...next, suggestAwemeId: event.target.value }))}
-          placeholder="直接发布时必填"
         />
       </label>
       <label>
@@ -274,7 +297,6 @@ function TaskTypeFields({ form, setForm }) {
         <input
           value={form.suggestReplyTo}
           onChange={(event) => setForm((next) => ({ ...next, suggestReplyTo: event.target.value }))}
-          placeholder="直接发布时必填"
         />
       </label>
       <label>
@@ -314,7 +336,7 @@ export function TasksPage() {
       setTasks(nextTasks);
       setForm((current) => ({
         ...current,
-        accountId: current.accountId || nextAccounts[0]?.id || '',
+        accountId: nextAccounts.some((account) => account.id === current.accountId) ? current.accountId : '',
       }));
     } catch (err) {
       setError(err.message || '获取任务失败');
@@ -381,26 +403,28 @@ export function TasksPage() {
       <form className="inline-form task-form" onSubmit={handleCreate}>
         <label>
           <span>账号</span>
-          <select
+          <SelectMenu
             value={form.accountId}
             onChange={(event) => setForm((next) => ({ ...next, accountId: event.target.value }))}
+            aria-label="账号"
           >
             <option value="">请选择账号</option>
             {accounts.map((account) => (
               <option key={account.id} value={account.id}>{account.name}</option>
             ))}
-          </select>
+          </SelectMenu>
         </label>
         <label>
           <span>类型</span>
-          <select
+          <SelectMenu
             value={form.type}
             onChange={(event) => setForm((current) => resetFieldsForType(event.target.value, current))}
+            aria-label="类型"
           >
             {TASK_TYPES.map((taskType) => (
               <option key={taskType.value} value={taskType.value}>{taskType.label}</option>
             ))}
-          </select>
+          </SelectMenu>
         </label>
         <TaskTypeFields form={form} setForm={setForm} />
         <button type="submit" disabled={loading}>创建任务</button>
@@ -419,6 +443,7 @@ export function TasksPage() {
               <p><span>账号：</span>{accountById.get(task.accountId)?.name || task.accountId}</p>
               <p><span>输入：</span>{describeInput(task)}</p>
               <p><span>{task.error ? '错误：' : '结果：'}</span>{describeResult(task)}</p>
+              <SearchResultList task={task} />
               <p className="muted">创建时间：{task.createdAt}</p>
             </div>
             <button

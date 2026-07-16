@@ -230,7 +230,17 @@ function safePageEval(expression, awaitPromise) {
 
 function buildInjectionScript() {
   const bridgeConfig = resolveBridgeConfig();
-  const scriptPath = path.resolve(__dirname, '..', '..', 'scripts', 'douyin.user.js');
+  const resourceScriptPath = path.join(process.resourcesPath || '', 'backend', 'scripts', 'douyin.user.js');
+  const unpackedScriptPath = path.join(process.resourcesPath || '', 'app.asar.unpacked', 'backend', 'scripts', 'douyin.user.js');
+  const packagedScriptPath = path.join(process.resourcesPath || '', 'app.asar', 'backend', 'scripts', 'douyin.user.js');
+  const devScriptPath = path.resolve(__dirname, '..', '..', 'scripts', 'douyin.user.js');
+  const scriptPath = fs.existsSync(resourceScriptPath)
+    ? resourceScriptPath
+    : fs.existsSync(unpackedScriptPath)
+    ? unpackedScriptPath
+    : fs.existsSync(packagedScriptPath)
+      ? packagedScriptPath
+      : devScriptPath;
   const userscript = fs.readFileSync(scriptPath, 'utf8');
 
   return `

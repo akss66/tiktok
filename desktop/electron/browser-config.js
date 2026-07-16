@@ -7,6 +7,12 @@ const SIDEBAR_WIDTH = 220;
 const BROWSER_DOCK_MIN_WIDTH = 560;
 const BROWSER_DOCK_MAX_WIDTH = 980;
 const APP_MIN_VISIBLE_WIDTH = 520;
+const APP_DOCK_COMFORT_WIDTH = 720;
+const BROWSER_DOCK_MODES = Object.freeze({
+  compact: 0.4,
+  balanced: 0.48,
+  wide: 0.56,
+});
 const LOGIN_COOKIE_CHECK_INTERVAL_MS = 10000;
 const LOGIN_PAGE_COOLDOWN_MS = 90000;
 const BRIDGE_INJECTION_VERSION = '2026-07-09-bridge-ready-guard';
@@ -65,14 +71,31 @@ function resolveBridgeConfig() {
   }
 }
 
-function getDockedBrowserWidth(windowWidth) {
-  const preferred = Math.round(windowWidth * 0.52);
-  const maxByAppSpace = Math.max(BROWSER_DOCK_MIN_WIDTH, windowWidth - SIDEBAR_WIDTH - APP_MIN_VISIBLE_WIDTH);
+function normalizeBrowserDockMode(mode) {
+  return Object.prototype.hasOwnProperty.call(BROWSER_DOCK_MODES, mode) ? mode : 'balanced';
+}
+
+function getDockedBrowserWidth(windowWidth, mode = 'balanced') {
+  const width = Math.max(0, Number(windowWidth) || 0);
+  const normalizedMode = normalizeBrowserDockMode(mode);
+  const preferred = Math.round(width * BROWSER_DOCK_MODES[normalizedMode]);
+  const adaptiveAppWidth = Math.min(
+    APP_DOCK_COMFORT_WIDTH,
+    Math.max(APP_MIN_VISIBLE_WIDTH, Math.round(width * 0.52)),
+  );
+  const maxByAppSpace = Math.max(BROWSER_DOCK_MIN_WIDTH, width - adaptiveAppWidth);
   return Math.min(
     BROWSER_DOCK_MAX_WIDTH,
     maxByAppSpace,
     Math.max(BROWSER_DOCK_MIN_WIDTH, preferred),
   );
+}
+
+function getDockedBrowserZoomFactor(browserWidth) {
+  const width = Math.max(0, Number(browserWidth) || 0);
+  if (width < 680) return 0.82;
+  if (width < 860) return 0.9;
+  return 1;
 }
 
 function shouldBlockExternalProtocol(rawUrl) {
@@ -95,6 +118,8 @@ function isHttpUrl(rawUrl) {
 
 module.exports = {
   APP_MIN_VISIBLE_WIDTH,
+  APP_DOCK_COMFORT_WIDTH,
+  BROWSER_DOCK_MODES,
   BLOCKED_EXTERNAL_PROTOCOLS,
   BRIDGE_INJECTION_VERSION,
   BROWSER_DOCK_MAX_WIDTH,
@@ -107,8 +132,9 @@ module.exports = {
   SIDEBAR_WIDTH,
   chromeCompatUserAgent,
   getDockedBrowserWidth,
+  getDockedBrowserZoomFactor,
   isHttpUrl,
+  normalizeBrowserDockMode,
   resolveBridgeConfig,
   shouldBlockExternalProtocol,
 };
-

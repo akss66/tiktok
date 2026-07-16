@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { listAccounts, listVideoComments, listVideos, syncComments, syncMyVideos } from '../api.js';
 import { PageHeader } from './PageHeader.jsx';
+import { Pagination } from './Pagination.jsx';
+import { SelectMenu } from './SelectMenu.jsx';
+
+const VIDEO_PAGE_SIZE = 12;
+const COMMENT_PAGE_SIZE = 50;
 
 function compact(text, limit = 74) {
   const value = String(text || '').replace(/\s+/g, ' ').trim();
@@ -15,23 +20,39 @@ export function MyVideosPage() {
   const [activeAwemeId, setActiveAwemeId] = useState('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
+  const [syncSummary, setSyncSummary] = useState(null);
+  const [videoPage, setVideoPage] = useState(1);
+  const [commentPage, setCommentPage] = useState(1);
 
   const activeVideo = useMemo(
     () => videos.find((video) => video.awemeId === activeAwemeId),
     [videos, activeAwemeId],
   );
+  const visibleVideos = useMemo(
+    () => videos.slice((videoPage - 1) * VIDEO_PAGE_SIZE, videoPage * VIDEO_PAGE_SIZE),
+    [videos, videoPage],
+  );
+  const visibleComments = useMemo(
+    () => comments.slice((commentPage - 1) * COMMENT_PAGE_SIZE, commentPage * COMMENT_PAGE_SIZE),
+    [comments, commentPage],
+  );
 
   async function refresh(nextAccountId = accountId) {
     setLoading(true);
     setMessage('');
+    setSyncSummary(null);
+    setComments([]);
+    setActiveAwemeId('');
     try {
       const nextAccounts = await listAccounts();
-      const resolvedAccountId = nextAccountId || nextAccounts[0]?.id || '';
+      const resolvedAccountId = nextAccounts.some((account) => account.id === nextAccountId) ? nextAccountId : '';
       setAccounts(nextAccounts);
       setAccountId(resolvedAccountId);
       const nextVideos = resolvedAccountId ? await listVideos({ accountId: resolvedAccountId, isMine: true }) : [];
       setVideos(nextVideos);
-      const nextActive = activeAwemeId || nextVideos[0]?.awemeId || '';
+      setVideoPage(1);
+      setCommentPage(1);
+      const nextActive = nextVideos[0]?.awemeId || '';
       setActiveAwemeId(nextActive);
       setComments(nextActive ? await listVideoComments(nextActive) : []);
     } catch (error) {
@@ -49,11 +70,15 @@ export function MyVideosPage() {
     setLoading(true);
     setMessage('正在拉取我的作品...');
     try {
-      const nextVideos = await syncMyVideos({ accountId, count: 200 });
+      const result = await syncMyVideos({ accountId, count: 500 });
+      const nextVideos = result.items || result;
       setVideos(nextVideos);
+      setSyncSummary(result.summary || null);
+      setVideoPage(1);
+      setCommentPage(1);
       setActiveAwemeId(nextVideos[0]?.awemeId || '');
       setComments([]);
-      setMessage(`已同步 ${nextVideos.length} 个作品`);
+      setMessage(`已同步 ${nextVideos.length} 个作品，共请求 ${result.summary?.pages || 1} 页`);
     } catch (error) {
       setMessage(error.message || '同步我的作品失败');
     } finally {
@@ -63,6 +88,8 @@ export function MyVideosPage() {
 
   async function handleSelectVideo(awemeId) {
     setActiveAwemeId(awemeId);
+    setCommentPage(1);
+    setSyncSummary(null);
     setLoading(true);
     setMessage('');
     try {
@@ -82,9 +109,12 @@ export function MyVideosPage() {
     setLoading(true);
     setMessage('正在同步评论区...');
     try {
-      const nextComments = await syncComments(activeAwemeId, { accountId, count: 300 });
+      const result = await syncComments(activeAwemeId, { accountId, count: 500 });
+      const nextComments = result.items || result;
       setComments(nextComments);
-      setMessage(`已同步 ${nextComments.length} 条评论`);
+      setSyncSummary(result.summary || null);
+      setCommentPage(1);
+      setMessage(`已同步 ${nextComments.length} 条评论，共请求 ${result.summary?.pages || 1} 页`);
     } catch (error) {
       setMessage(error.message || '同步评论失败');
     } finally {
@@ -104,7 +134,7 @@ export function MyVideosPage() {
         actions={(
           <>
             <button type="button" onClick={() => refresh()} disabled={loading}>刷新</button>
-            <button type="button" onClick={handleSyncVideos} disabled={loading}>同步我的作品</button>
+            <button type="button" className="primary-button" onClick={handleSyncVideos} disabled={loading}>同步我的作品</button>
             <button type="button" onClick={handleSyncComments} disabled={loading || !activeAwemeId}>同步评论</button>
           </>
         )}
@@ -113,10 +143,10 @@ export function MyVideosPage() {
       <div className="panel-section action-strip">
         <label>
           <span>账号</span>
-          <select value={accountId} onChange={(event) => refresh(event.target.value)}>
+          <SelectMenu value={accountId} onChange={(event) => refresh(event.target.value)} aria-label="账号">
             <option value="">请选择账号</option>
             {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
-          </select>
+          </SelectMenu>
         </label>
         <div>
           <span className="field-label">当前作品</span>
@@ -126,9 +156,19 @@ export function MyVideosPage() {
 
       {message ? <p className={message.includes('失败') || message.includes('请选择') ? 'inline-error' : 'muted'}>{message}</p> : null}
 
+      {syncSummary ? (
+        <div className="sync-summary" role="status">
+          <span>请求 {syncSummary.requested}</span>
+          <span>获取 {syncSummary.fetched}</span>
+          <span>保存 {syncSummary.saved}</span>
+          {syncSummary.duplicates ? <span>去重 {syncSummary.duplicates}</span> : null}
+          <span>分页 {syncSummary.pages}</span>
+        </div>
+      ) : null}
+
       <div className="job-grid">
         <div className="job-list">
-          {videos.map((video) => (
+          {visibleVideos.map((video) => (
             <article key={video.awemeId} className={`job-card${activeAwemeId === video.awemeId ? ' active' : ''}`}>
               <button type="button" className="job-card-button" onClick={() => handleSelectVideo(video.awemeId)}>
                 <strong>{video.awemeId}</strong>
@@ -139,6 +179,7 @@ export function MyVideosPage() {
             </article>
           ))}
           {!videos.length ? <div className="empty-state">{loading ? '加载中...' : '暂无作品，先同步我的作品。'}</div> : null}
+          <Pagination page={videoPage} pageSize={VIDEO_PAGE_SIZE} total={videos.length} onPageChange={setVideoPage} noun="个作品" />
         </div>
 
         <div className="table-wrap">
@@ -152,7 +193,7 @@ export function MyVideosPage() {
               </tr>
             </thead>
             <tbody>
-              {comments.map((comment) => (
+              {visibleComments.map((comment) => (
                 <tr key={comment.cid}>
                   <td>{comment.userName || '-'}</td>
                   <td>
@@ -166,6 +207,7 @@ export function MyVideosPage() {
               {!comments.length ? <tr><td colSpan="4" className="empty-row">选择作品并同步评论区。</td></tr> : null}
             </tbody>
           </table>
+          <Pagination page={commentPage} pageSize={COMMENT_PAGE_SIZE} total={comments.length} onPageChange={setCommentPage} noun="条评论" />
         </div>
       </div>
     </section>

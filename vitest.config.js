@@ -1,8 +1,9 @@
 // vitest.config.js
-const { defineConfig } = require('vitest/config');
+const { configDefaults, defineConfig } = require('vitest/config');
 
 module.exports = defineConfig({
   test: {
     globals: true,
+    exclude: [...configDefaults.exclude, '.superpowers/**'],
   },
 });

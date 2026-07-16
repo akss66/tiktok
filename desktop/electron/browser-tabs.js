@@ -10,7 +10,9 @@ const {
   LOGIN_PAGE_COOLDOWN_MS,
   chromeCompatUserAgent,
   getDockedBrowserWidth,
+  getDockedBrowserZoomFactor,
   isHttpUrl,
+  normalizeBrowserDockMode,
   resolveBridgeConfig,
   shouldBlockExternalProtocol,
 } = require('./browser-config');
@@ -22,12 +24,20 @@ const {
   readDouyinLoginCookies,
 } = require('./login-detector');
 const { compileUserscriptForElectron } = require('./userscript-compiler');
+const {
+  createRecoveryScheduler,
+  executeWithTimeout,
+  nextBridgeRetryDelay,
+} = require('./bridge-recovery');
 
 let activeView = null;
 let activeAccountKey = null;
 let activeViewVisible = false;
 let activePollController = null;
 let activeDiagnosticView = false;
+let browserDockMode = 'balanced';
+let activeBrowserWidth = 0;
+let activeBrowserZoomFactor = 1;
 let activeBridgeDiagnostic = {
   status: 'idle',
   message: '',
@@ -37,6 +47,32 @@ let activeBridgeDiagnostic = {
 const accountViews = new Map();
 const loginDetectors = new Map();
 const loginPageOpenedAt = new Map();
+const bridgeRecoverySchedulers = new Map();
+const bridgeInjectionPromises = new Map();
+const backgroundBootstrapPromises = new Map();
+let browserLifecycleLogger = null;
+let lastBrowserLifecycleEvent = null;
+
+function setLifecycleLogger(logger) {
+  browserLifecycleLogger = typeof logger === 'function' ? logger : null;
+}
+
+function recordBrowserLifecycle(action, details = {}) {
+  const event = {
+    action,
+    accountKey: details.accountKey || activeAccountKey || null,
+    reason: details.reason || '',
+    url: details.url || getViewUrl(details.view || activeView),
+    active: Boolean((details.view || activeView) && (details.view || activeView) === activeView),
+    visible: activeViewVisible,
+    createdAt: new Date().toISOString(),
+  };
+  lastBrowserLifecycleEvent = event;
+  if (browserLifecycleLogger) {
+    browserLifecycleLogger(`browser lifecycle: ${JSON.stringify(event)}`);
+  }
+  return event;
+}
 
 function createAccountBrowserView(account, options = {}) {
   const webPreferences = {
@@ -50,26 +86,60 @@ function createAccountBrowserView(account, options = {}) {
   }
   const view = new BrowserView({ webPreferences });
   view.__douyinDesktopBridgePreload = Boolean(options.bridgePreload);
+  view.__douyinDesktopBridgeInjected = false;
+  view.__douyinDesktopBridgeLastError = '';
   view.webContents.setUserAgent(chromeCompatUserAgent(), 'zh-CN,zh;q=0.9');
   return view;
 }
 
-function destroyActiveView(mainWindow) {
+function isViewDestroyed(view) {
+  return !view || !view.webContents || view.webContents.isDestroyed();
+}
+
+function getViewUrl(view) {
+  if (isViewDestroyed(view)) return '';
+  return String(view.webContents.getURL() || '');
+}
+
+function markViewBridgeState(view, injected, error = '') {
+  if (!view) return;
+  view.__douyinDesktopBridgeInjected = injected === true;
+  view.__douyinDesktopBridgeLastError = error || '';
+}
+
+function isAllowedDouyinUrl(url) {
+  try {
+    const parsed = new URL(String(url || ''));
+    const hostname = String(parsed.hostname || '').toLowerCase();
+    return hostname === 'douyin.com' || hostname.endsWith('.douyin.com');
+  } catch (_error) {
+    return false;
+  }
+}
+
+function destroyActiveView(mainWindow, reason = 'explicit-close') {
   stopActivePoller();
   if (!activeView) return;
+  const view = activeView;
+  const accountKey = activeAccountKey;
+  recordBrowserLifecycle('destroy', { accountKey, view, reason });
+  cancelBridgeRecovery(view);
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.removeBrowserView(activeView);
+    mainWindow.removeBrowserView(view);
   }
-  if (activeAccountKey) accountViews.delete(activeAccountKey);
-  activeView.webContents.destroy();
+  if (accountKey) accountViews.delete(accountKey);
   activeView = null;
   activeAccountKey = null;
   activeViewVisible = false;
   activeDiagnosticView = false;
+  activeBrowserWidth = 0;
+  activeBrowserZoomFactor = 1;
+  if (!view.webContents.isDestroyed()) view.webContents.destroy();
 }
 
-function detachActiveView(mainWindow) {
+function detachActiveView(mainWindow, reason = 'internal-detach') {
   if (!activeView || !activeViewVisible) return;
+  recordBrowserLifecycle('hide', { view: activeView, reason });
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.removeBrowserView(activeView);
   }
@@ -201,11 +271,27 @@ function safePageEval(expression, awaitPromise) {
   `;
 }
 
+function withTimeout(promise, timeoutMs, message) {
+  let timer = null;
+  return Promise.race([
+    promise.finally(() => {
+      if (timer) clearTimeout(timer);
+    }),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    }),
+  ]);
+}
+
 async function executeBridgeEval(view, msg) {
   try {
-    const value = await view.webContents.executeJavaScript(
-      safePageEval(msg.expression, msg.awaitPromise),
-      true,
+    const value = await withTimeout(
+      view.webContents.executeJavaScript(
+        safePageEval(msg.expression, msg.awaitPromise),
+        true,
+      ),
+      50000,
+      '页面任务执行超时：抖音接口长时间没有返回，已释放任务队列，请刷新页面后重试。',
     );
     return value;
   } catch (error) {
@@ -215,7 +301,7 @@ async function executeBridgeEval(view, msg) {
   }
 }
 
-async function startMainPoller(view) {
+async function startMainPoller(view, reconnectAttempt = 0) {
   if (
     activePollController
     && !activePollController.stopped
@@ -225,7 +311,7 @@ async function startMainPoller(view) {
   }
   stopActivePoller();
   const config = resolveBridgeConfig();
-  const controller = { stopped: false, abortController: null, view };
+  const controller = { stopped: false, abortController: null, view, reconnectAttempt };
   activePollController = controller;
 
   try {
@@ -309,10 +395,11 @@ async function startMainPoller(view) {
   }
 
   if (!controller.stopped && activePollController === controller && !view.webContents.isDestroyed()) {
-    await sleep(2000);
+    const retryDelay = nextBridgeRetryDelay(reconnectAttempt);
+    await sleep(retryDelay);
     if (!controller.stopped && activePollController === controller) {
       activePollController = null;
-      startMainPoller(view);
+      startMainPoller(view, reconnectAttempt + 1);
     }
   }
   return controller;
@@ -320,7 +407,17 @@ async function startMainPoller(view) {
 
 function buildInjectionScript() {
   const bridgeConfig = resolveBridgeConfig();
-  const scriptPath = path.resolve(__dirname, '..', '..', 'scripts', 'douyin.user.js');
+  const resourceScriptPath = path.join(process.resourcesPath || '', 'backend', 'scripts', 'douyin.user.js');
+  const unpackedScriptPath = path.join(process.resourcesPath || '', 'app.asar.unpacked', 'backend', 'scripts', 'douyin.user.js');
+  const packagedScriptPath = path.join(process.resourcesPath || '', 'app.asar', 'backend', 'scripts', 'douyin.user.js');
+  const devScriptPath = path.resolve(__dirname, '..', '..', 'scripts', 'douyin.user.js');
+  const scriptPath = fs.existsSync(resourceScriptPath)
+    ? resourceScriptPath
+    : fs.existsSync(unpackedScriptPath)
+    ? unpackedScriptPath
+    : fs.existsSync(packagedScriptPath)
+      ? packagedScriptPath
+      : devScriptPath;
   const userscript = fs.readFileSync(scriptPath, 'utf8');
   const compiledUserscript = compileUserscriptForElectron(userscript);
 
@@ -400,16 +497,90 @@ function buildInjectionScript() {
   `;
 }
 
+async function runBridgeInjectionScript(view) {
+  const injectionResult = await view.webContents.executeJavaScript(buildInjectionScript(), true);
+  if (!injectionResult?.ok) {
+    throw new Error(injectionResult?.error || '页面注入脚本执行失败');
+  }
+  const ready = await view.webContents.executeJavaScript(
+    'Boolean(window.__bridge && typeof window.__bridge.search === "function")',
+    true,
+  );
+  if (!ready) {
+    throw new Error('页面 Bridge API 未准备好，请刷新 douyin.com 页面后重试');
+  }
+  markViewBridgeState(view, true);
+  return { ok: true };
+}
+
+function waitForViewLoad(view, url, timeoutMs = 20000) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timer = null;
+    const cleanup = () => {
+      view.webContents.removeListener('did-finish-load', onLoadFinished);
+      view.webContents.removeListener('did-fail-load', onLoadFailed);
+    };
+    const finish = (fn, payload) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      cleanup();
+      fn(payload);
+    };
+    const onLoadFinished = () => {
+      finish(resolve, { ok: true, url: getViewUrl(view) });
+    };
+    const onLoadFailed = (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      if (!isMainFrame || errorCode === -3) return;
+      finish(reject, new Error(
+        `账号浏览器加载失败：${errorDescription || '页面加载失败'} (${errorCode}) ${validatedURL || ''}`.trim(),
+      ));
+    };
+    timer = setTimeout(() => {
+      finish(reject, new Error('账号浏览器加载超时，请检查网络后重试'));
+    }, timeoutMs);
+
+    view.webContents.on('did-finish-load', onLoadFinished);
+    view.webContents.on('did-fail-load', onLoadFailed);
+
+    view.webContents.loadURL(url).catch((error) => {
+      finish(reject, error);
+    });
+  });
+}
+
 function resizeActiveBrowser(mainWindow) {
   if (!activeView || !activeViewVisible || !mainWindow || mainWindow.isDestroyed()) return;
   const [width, height] = mainWindow.getContentSize();
-  const browserWidth = getDockedBrowserWidth(width);
+  const browserWidth = getDockedBrowserWidth(width, browserDockMode);
+  const zoomFactor = getDockedBrowserZoomFactor(browserWidth);
   activeView.setBounds({
     x: Math.max(0, width - browserWidth),
     y: 0,
     width: browserWidth,
     height,
   });
+  activeView.webContents.setZoomFactor(zoomFactor);
+  activeBrowserWidth = browserWidth;
+  activeBrowserZoomFactor = zoomFactor;
+  mainWindow.webContents.send('browser:layout', {
+    mode: browserDockMode,
+    browserWidth,
+    appWidth: Math.max(0, width - browserWidth),
+    zoomFactor,
+  });
+}
+
+function setBrowserDockMode(mainWindow, mode) {
+  browserDockMode = normalizeBrowserDockMode(mode);
+  resizeActiveBrowser(mainWindow);
+  return {
+    ok: true,
+    mode: browserDockMode,
+    browserWidth: activeBrowserWidth,
+    zoomFactor: activeBrowserZoomFactor,
+  };
 }
 
 function notifyBrowserNotice(mainWindow, message, metadata = {}) {
@@ -427,8 +598,9 @@ function blockExternalNavigation(event, url, mainWindow) {
   return false;
 }
 
-async function injectBridge(view) {
+async function performBridgeInjection(view) {
   if (view.webContents.getURL().startsWith('chrome-error://')) {
+    markViewBridgeState(view, false, '当前页面加载失败，无法注入任务 Bridge');
     return { ok: false, error: '当前页面加载失败，无法注入任务 Bridge。' };
   }
   if (
@@ -451,17 +623,7 @@ async function injectBridge(view) {
   };
   stopActivePoller();
   try {
-    const injectionResult = await view.webContents.executeJavaScript(buildInjectionScript(), true);
-    if (!injectionResult?.ok) {
-      throw new Error(injectionResult?.error || '页面注入脚本执行失败');
-    }
-    const ready = await view.webContents.executeJavaScript(
-      'Boolean(window.__bridge && typeof window.__bridge.search === "function")',
-      true,
-    );
-    if (!ready) {
-      throw new Error('页面 Bridge API 未准备好：window.__bridge.search 不存在');
-    }
+    await runBridgeInjectionScript(view);
     activeBridgeDiagnostic = {
       status: 'connecting',
       message: '页面 Bridge 已创建，正在连接任务服务',
@@ -472,6 +634,7 @@ async function injectBridge(view) {
     return { ok: true };
   } catch (error) {
     stopActivePoller();
+    markViewBridgeState(view, false, error.message || String(error));
     activeBridgeDiagnostic = {
       status: 'inject_failed',
       message: error.message || String(error),
@@ -483,6 +646,298 @@ async function injectBridge(view) {
   }
 }
 
+function injectBridge(view) {
+  const existing = bridgeInjectionPromises.get(view);
+  if (existing) return existing;
+  const pending = performBridgeInjection(view).finally(() => {
+    if (bridgeInjectionPromises.get(view) === pending) {
+      bridgeInjectionPromises.delete(view);
+    }
+  });
+  bridgeInjectionPromises.set(view, pending);
+  return pending;
+}
+
+function scheduleBridgeRecovery(view, delayMs = 500) {
+  if (!view || view.webContents.isDestroyed()) return;
+  let scheduler = bridgeRecoverySchedulers.get(view);
+  if (!scheduler) {
+    scheduler = createRecoveryScheduler(async () => {
+      if (view !== activeView || activeDiagnosticView || view.webContents.isDestroyed()) return;
+      const url = String(view.webContents.getURL() || '');
+      if (!url.includes('douyin.com') || url.startsWith('chrome-error://')) return;
+      const result = await injectBridge(view);
+      if (!result?.ok && view === activeView && !view.webContents.isDestroyed()) {
+        scheduler.schedule(3000);
+      }
+    });
+    bridgeRecoverySchedulers.set(view, scheduler);
+  }
+  scheduler.schedule(delayMs);
+}
+
+function cancelBridgeRecovery(view) {
+  const scheduler = bridgeRecoverySchedulers.get(view);
+  if (scheduler) scheduler.cancel();
+  bridgeRecoverySchedulers.delete(view);
+  bridgeInjectionPromises.delete(view);
+}
+
+async function ensureBackgroundAccountView(mainWindow, account, options = {}) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return { ok: false, error: '主窗口不可用' };
+  }
+  const accountKey = accountKeyFor(account);
+  if (!accountKey) {
+    return { ok: false, error: '账号信息缺少 Profile Key' };
+  }
+
+  let view = accountViews.get(accountKey);
+  if (view && isViewDestroyed(view)) {
+    accountViews.delete(accountKey);
+    view = null;
+  }
+
+  const pendingBootstrap = backgroundBootstrapPromises.get(accountKey);
+  if (pendingBootstrap) {
+    return pendingBootstrap;
+  }
+
+  const reused = Boolean(view);
+  if (!reused) {
+    const bootstrapPromise = (async () => {
+      const createView = typeof options.createView === 'function'
+        ? options.createView
+        : (nextAccount) => createAccountBrowserView(nextAccount, { bridgePreload: true });
+      const nextView = createView(account, {
+        partition: partitionForAccount(account),
+        bridgePreload: true,
+      });
+      nextView.__douyinDesktopBridgePreload = true;
+      markViewBridgeState(nextView, false);
+      accountViews.set(accountKey, nextView);
+      attachBrowserHandlers(mainWindow, nextView, account, options);
+      try {
+        await waitForViewLoad(nextView, DOUYIN_HOME_URL);
+        if (options.requireBridge !== false) {
+          await runBridgeInjectionScript(nextView);
+        }
+      } catch (error) {
+        const message = error.message || String(error);
+        markViewBridgeState(nextView, false, message);
+        if (activeView !== nextView) {
+          destroyCurrentAccountView(mainWindow, accountKey, nextView, 'background-bootstrap-failed');
+        } else {
+          recordBrowserLifecycle('load-error-retained', {
+            accountKey,
+            view: nextView,
+            reason: 'background-bootstrap-became-visible',
+          });
+        }
+        return { ok: false, accountId: accountKey, error: message };
+      }
+      return {
+        ok: true,
+        accountId: accountKey,
+        reused: false,
+        state: getAccountViewState(accountKey),
+      };
+    })();
+    backgroundBootstrapPromises.set(accountKey, bootstrapPromise);
+    try {
+      return await bootstrapPromise;
+    } finally {
+      if (backgroundBootstrapPromises.get(accountKey) === bootstrapPromise) {
+        backgroundBootstrapPromises.delete(accountKey);
+      }
+    }
+  }
+
+  return {
+    ok: true,
+    accountId: accountKey,
+    reused,
+    state: getAccountViewState(accountKey),
+  };
+}
+
+async function executeInAccountView(accountId, expression, options = {}) {
+  const accountKey = String(accountId || '').trim();
+  if (!accountKey) {
+    throw new Error('缺少账号 ID，无法定位账号浏览器');
+  }
+  const view = accountViews.get(accountKey);
+  if (!view) {
+    throw new Error(`未找到账号 ${accountKey} 的浏览器，请先打开该账号浏览器或启动私信监控`);
+  }
+  if (isViewDestroyed(view)) {
+    throw new Error(`账号浏览器已经销毁，请先重新打开账号 ${accountKey} 的浏览器`);
+  }
+
+  const url = getViewUrl(view);
+  if (url.startsWith('chrome-error://')) {
+    throw new Error(`账号浏览器当前页面加载失败，请先重新打开账号 ${accountKey} 的浏览器后再试`);
+  }
+  if (!isAllowedDouyinUrl(url)) {
+    if (!url) {
+      throw new Error(`账号浏览器当前页面缺少 URL，请先打开账号 ${accountKey} 的 douyin.com 页面后再试`);
+    }
+    try {
+      new URL(url);
+    } catch (_error) {
+      throw new Error(`账号浏览器当前页面 URL 无效，请先打开账号 ${accountKey} 的 douyin.com 页面后再试`);
+    }
+    throw new Error(`账号浏览器未停留在抖音页面，请先让账号 ${accountKey} 打开 douyin.com 后再试`);
+  }
+
+  const executionTimeoutMs = Math.max(1_000, Number(options.timeoutMs) || 20_000);
+  const probeBridgeReady = () => executeWithTimeout(
+    () => view.webContents.executeJavaScript(
+      'Boolean(window.__bridge && typeof window.__bridge === "object")',
+      options.userGesture === true,
+    ),
+    Math.min(5_000, executionTimeoutMs),
+    { timeoutMessage: `账号 ${accountKey} 的页面 Bridge 状态检查超时` },
+  ).catch(() => false);
+
+  let bridgeReady = await probeBridgeReady();
+  if (!bridgeReady) {
+    const recovery = await executeWithTimeout(
+      () => injectBridge(view),
+      Math.min(10_000, executionTimeoutMs),
+      { timeoutMessage: `账号 ${accountKey} 的页面 Bridge 恢复超时` },
+    ).catch((error) => ({ ok: false, error: error.message || String(error) }));
+    bridgeReady = Boolean(recovery?.ok) && await probeBridgeReady();
+  }
+  markViewBridgeState(view, bridgeReady, bridgeReady ? '' : '页面 Bridge 未就绪');
+  if (!bridgeReady) {
+    throw new Error(`账号浏览器中的页面 Bridge 未就绪，请先刷新账号 ${accountKey} 的 douyin.com 页面后再重试`);
+  }
+
+  return executeWithTimeout(
+    () => view.webContents.executeJavaScript(expression, options.userGesture === true),
+    executionTimeoutMs,
+    {
+      timeoutMessage: `账号 ${accountKey} 的页面执行超过 ${Math.ceil(executionTimeoutMs / 1000)} 秒，页面可能已刷新，系统将自动重新连接`,
+    },
+  );
+}
+
+async function readAccountDeviceId(accountId, options = {}) {
+  const accountKey = String(accountId || '').trim();
+  if (!accountKey) throw new Error('Missing account ID for device ID lookup');
+  const view = accountViews.get(accountKey);
+  if (!view || isViewDestroyed(view)) {
+    throw new Error(`Account ${accountKey} browser is unavailable`);
+  }
+  const url = getViewUrl(view);
+  if (!isAllowedDouyinUrl(url) || url.startsWith('chrome-error://')) {
+    throw new Error(`Account ${accountKey} browser is not on a valid douyin.com page`);
+  }
+  const expression = `(async () => {
+    const response = await fetch(
+      '/aweme/v1/web/query/user/?device_platform=webapp&aid=6383&channel=channel_pc_web',
+      { credentials: 'include', cache: 'no-store' },
+    );
+    if (!response.ok) {
+      throw new Error('query/user returned HTTP ' + response.status);
+    }
+    const payload = await response.json();
+    const remoteId = String(payload?.id || payload?.data?.id || '').trim();
+    if (!remoteId) throw new Error('query/user did not return a device id');
+    return remoteId;
+  })()`;
+  return executeWithTimeout(
+    () => view.webContents.executeJavaScript(expression, false),
+    Math.max(1_000, Number(options.timeoutMs) || 5_000),
+    { timeoutMessage: `Account ${accountKey} device ID lookup timed out` },
+  );
+}
+
+async function readAccountUserId(accountId, options = {}) {
+  const accountKey = String(accountId || '').trim();
+  if (!accountKey) throw new Error('Missing account ID for user ID lookup');
+  const view = accountViews.get(accountKey);
+  if (!view || isViewDestroyed(view)) {
+    throw new Error(`Account ${accountKey} browser is unavailable`);
+  }
+  const url = getViewUrl(view);
+  if (!isAllowedDouyinUrl(url) || url.startsWith('chrome-error://')) {
+    throw new Error(`Account ${accountKey} browser is not on a valid douyin.com page`);
+  }
+  const expression = `(async () => {
+    const response = await fetch(
+      '/aweme/v1/web/query/user/?device_platform=webapp&aid=6383&channel=channel_pc_web',
+      { credentials: 'include', cache: 'no-store' },
+    );
+    if (!response.ok) throw new Error('query/user returned HTTP ' + response.status);
+    const payload = await response.json();
+    const user = payload?.user || payload?.data?.user || {};
+    const userId = String(user?.uid || user?.short_id || '').trim();
+    if (!userId) throw new Error('query/user did not return a user id');
+    return userId;
+  })()`;
+  return executeWithTimeout(
+    () => view.webContents.executeJavaScript(expression, false),
+    Math.max(1_000, Number(options.timeoutMs) || 5_000),
+    { timeoutMessage: `Account ${accountKey} user ID lookup timed out` },
+  );
+}
+
+function getAccountViewState(accountId) {
+  const accountKey = String(accountId || '').trim();
+  const view = accountViews.get(accountKey);
+  if (!view) {
+    return {
+      accountId: accountKey,
+      exists: false,
+      destroyed: true,
+      url: '',
+      visible: false,
+      active: false,
+      bridgeInjected: false,
+      bridgePreload: false,
+      lastError: '',
+    };
+  }
+  const destroyed = isViewDestroyed(view);
+  return {
+    accountId: accountKey,
+    exists: true,
+    destroyed,
+    url: destroyed ? '' : getViewUrl(view),
+    visible: view === activeView && activeViewVisible,
+    active: view === activeView,
+    bridgeInjected: Boolean(view.__douyinDesktopBridgeInjected),
+    bridgePreload: Boolean(view.__douyinDesktopBridgePreload),
+    lastError: String(view.__douyinDesktopBridgeLastError || ''),
+  };
+}
+
+function closeAccountView(mainWindow, accountId) {
+  const accountKey = String(accountId || '').trim();
+  const view = accountViews.get(accountKey);
+  if (!view) return { ok: true, accountId: accountKey, closed: false };
+  destroyCurrentAccountView(mainWindow, accountKey, view, 'explicit-account-close');
+  return { ok: true, accountId: accountKey, closed: true };
+}
+
+function releaseBackgroundAccountView(mainWindow, accountId) {
+  const accountKey = String(accountId || '').trim();
+  const view = accountViews.get(accountKey);
+  if (!view) return { ok: true, accountId: accountKey, closed: false, retained: false };
+  if (view === activeView) {
+    recordBrowserLifecycle('background-release-retained', {
+      accountKey,
+      view,
+      reason: 'user-owned-active-view',
+    });
+    return { ok: true, accountId: accountKey, closed: false, retained: true };
+  }
+  destroyCurrentAccountView(mainWindow, accountKey, view, 'background-monitor-release');
+  return { ok: true, accountId: accountKey, closed: true, retained: false };
+}
+
 function getBridgeDiagnostic() {
   return {
     ...activeBridgeDiagnostic,
@@ -490,8 +945,12 @@ function getBridgeDiagnostic() {
     activeAccountKey,
     activeViewVisible,
     activeDiagnosticView,
+    browserDockMode,
+    browserDockWidth: activeBrowserWidth,
+    browserZoomFactor: activeBrowserZoomFactor,
     bridgePreload: Boolean(activeView?.__douyinDesktopBridgePreload),
     activeUrl: activeView && !activeView.webContents.isDestroyed() ? activeView.webContents.getURL() : '',
+    lastLifecycleEvent: lastBrowserLifecycleEvent,
   };
 }
 
@@ -588,7 +1047,7 @@ async function upgradeActiveViewForBridge(mainWindow, currentUrl) {
   const accountKey = activeAccountKey;
   const existing = activeView;
   const existingAccount = { id: accountKey, profileKey: accountKey };
-  detachActiveView(mainWindow);
+  detachActiveView(mainWindow, 'bridge-preload-upgrade');
   stopActivePoller();
 
   const nextView = createAccountBrowserView(existingAccount, { bridgePreload: true });
@@ -601,7 +1060,14 @@ async function upgradeActiveViewForBridge(mainWindow, currentUrl) {
   resizeActiveBrowser(mainWindow);
   attachBrowserHandlers(mainWindow, nextView, existingAccount, { taskMode: true });
 
-  if (!existing.webContents.isDestroyed()) existing.webContents.destroy();
+  if (!existing.webContents.isDestroyed()) {
+    recordBrowserLifecycle('destroy', {
+      accountKey,
+      view: existing,
+      reason: 'bridge-preload-upgrade-replacement',
+    });
+    existing.webContents.destroy();
+  }
 
   return new Promise((resolve) => {
     let settled = false;
@@ -628,20 +1094,28 @@ async function upgradeActiveViewForBridge(mainWindow, currentUrl) {
   });
 }
 
-async function resetAccountBrowserData(mainWindow, account) {
+async function clearAccountPartition(account) {
   const accountKey = accountKeyFor(account);
   if (!accountKey) return { ok: false, error: '账号信息缺少 Profile Key' };
-
-  const view = accountViews.get(accountKey);
-  if (view) {
-    destroyCurrentAccountView(mainWindow, accountKey, view);
-  }
-
   const ses = session.fromPartition(partitionForAccount(account));
   await ses.clearStorageData({
     storages: ['cookies', 'localstorage', 'indexdb', 'cachestorage', 'serviceworkers'],
   });
   await ses.clearCache();
+  return { ok: true };
+}
+
+function getAccountSession(account) {
+  return session.fromPartition(partitionForAccount(account));
+}
+
+async function resetAccountBrowserData(mainWindow, account) {
+  const accountKey = accountKeyFor(account);
+  if (!accountKey) return { ok: false, error: '账号信息缺少 Profile Key' };
+
+  const view = accountViews.get(accountKey);
+  if (view) destroyCurrentAccountView(mainWindow, accountKey, view, 'account-data-reset');
+  await clearAccountPartition(account);
   notifyBrowserNotice(mainWindow, `${account.name || '账号'} 的浏览器环境已重置，请重新打开浏览器扫码。`, {
     accountId: account.id,
   });
@@ -848,19 +1322,20 @@ async function openAccountBrowser(mainWindow, account, options = {}) {
   }
 
   if (activeView && activeAccountKey !== accountKey) {
-    detachActiveView(mainWindow);
+    detachActiveView(mainWindow, 'account-switch');
     stopActivePoller();
   }
 
   let view = accountViews.get(accountKey);
   if (view && !view.webContents.isDestroyed() && !view.__douyinDesktopBridgePreload) {
     if (activeView === view) {
-      detachActiveView(mainWindow);
+      detachActiveView(mainWindow, 'replace-non-bridge-view');
       stopActivePoller();
       activeView = null;
       activeAccountKey = null;
       activeViewVisible = false;
     }
+    recordBrowserLifecycle('destroy', { accountKey, view, reason: 'upgrade-to-bridge-preload' });
     view.webContents.destroy();
     accountViews.delete(accountKey);
     view = null;
@@ -880,7 +1355,7 @@ async function openAccountBrowser(mainWindow, account, options = {}) {
 
   if (reused) {
     if (view.__douyinDesktopBridgePreload) {
-      injectBridge(view);
+      scheduleBridgeRecovery(view, 100);
     }
     return { ok: true, reused: true };
   }
@@ -889,41 +1364,61 @@ async function openAccountBrowser(mainWindow, account, options = {}) {
 
   return new Promise((resolve) => {
     let settled = false;
+    let timer = null;
+    const cleanupInitialLoadListeners = () => {
+      view.webContents.removeListener('did-finish-load', onInitialLoadFinished);
+      view.webContents.removeListener('did-fail-load', onInitialLoadFailed);
+    };
     const finish = (result) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      cleanupInitialLoadListeners();
       resolve(result);
     };
 
-    const timer = setTimeout(() => {
-      destroyCurrentAccountView(mainWindow, accountKey, view);
-      finish({ ok: false, error: '内置浏览器打开超时，请检查网络或代理后重试' });
-    }, 20000);
-
-    view.webContents.once('did-finish-load', () => {
+    const onInitialLoadFinished = () => {
       const currentUrl = view.webContents.getURL();
       if (!currentUrl.startsWith('chrome-error://')) {
         finish({ ok: true });
       }
-    });
+    };
 
-    view.webContents.once('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    const onInitialLoadFailed = (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
       if (!isMainFrame || errorCode === -3) return;
       if (shouldBlockExternalProtocol(validatedURL)) {
         finish({ ok: true });
         return;
       }
-      destroyCurrentAccountView(mainWindow, accountKey, view);
       finish({
         ok: false,
         error: `内置浏览器打开失败：${errorDescription || '页面加载失败'} (${errorCode}) ${validatedURL || ''}`.trim(),
       });
-    });
+      recordBrowserLifecycle('load-error-retained', {
+        accountKey,
+        view,
+        reason: 'initial-load-failed',
+      });
+    };
+
+    view.webContents.on('did-finish-load', onInitialLoadFinished);
+    view.webContents.on('did-fail-load', onInitialLoadFailed);
+    timer = setTimeout(() => {
+      finish({ ok: false, error: '内置浏览器打开超时，请检查网络或代理后重试' });
+      recordBrowserLifecycle('load-error-retained', {
+        accountKey,
+        view,
+        reason: 'initial-load-timeout',
+      });
+    }, 20000);
 
     view.webContents.loadURL(DOUYIN_HOME_URL).catch((error) => {
-      destroyCurrentAccountView(mainWindow, accountKey, view);
       finish({ ok: false, error: `内置浏览器打开失败：${error.message}` });
+      recordBrowserLifecycle('load-error-retained', {
+        accountKey,
+        view,
+        reason: 'initial-load-rejected',
+      });
     });
     markLoginPageOpened(accountKey);
   });
@@ -948,7 +1443,7 @@ async function openCleanLoginBrowser(mainWindow, account) {
   }
 
   if (activeView) {
-    detachActiveView(mainWindow);
+    detachActiveView(mainWindow, 'open-clean-login');
     stopActivePoller();
   }
 
@@ -967,47 +1462,71 @@ async function openCleanLoginBrowser(mainWindow, account) {
 
   return new Promise((resolve) => {
     let settled = false;
+    let timer = null;
+    const cleanupInitialLoadListeners = () => {
+      view.webContents.removeListener('did-finish-load', onInitialLoadFinished);
+      view.webContents.removeListener('did-fail-load', onInitialLoadFailed);
+    };
     const finish = (result) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      cleanupInitialLoadListeners();
       resolve(result);
     };
 
-    const timer = setTimeout(() => {
-      destroyCurrentAccountView(mainWindow, activeAccountKey, view);
-      finish({ ok: false, error: '纯净登录诊断浏览器打开超时，请检查网络后重试' });
-    }, 20000);
-
-    view.webContents.once('did-finish-load', () => {
+    const onInitialLoadFinished = () => {
       const currentUrl = view.webContents.getURL();
       if (!currentUrl.startsWith('chrome-error://')) {
         finish({ ok: true, diagnostic: true });
       }
-    });
+    };
 
-    view.webContents.once('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    const onInitialLoadFailed = (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
       if (!isMainFrame || errorCode === -3) return;
       if (shouldBlockExternalProtocol(validatedURL)) {
         finish({ ok: true, diagnostic: true });
         return;
       }
-      destroyCurrentAccountView(mainWindow, activeAccountKey, view);
       finish({
         ok: false,
         error: `纯净登录诊断浏览器打开失败：${errorDescription || '页面加载失败'} (${errorCode}) ${validatedURL || ''}`.trim(),
       });
-    });
+      recordBrowserLifecycle('load-error-retained', {
+        accountKey: cleanAccountKey,
+        view,
+        reason: 'clean-login-load-failed',
+      });
+    };
+
+    timer = setTimeout(() => {
+      finish({ ok: false, error: '纯净登录诊断浏览器打开超时，请检查网络后重试' });
+      recordBrowserLifecycle('load-error-retained', {
+        accountKey: cleanAccountKey,
+        view,
+        reason: 'clean-login-load-timeout',
+      });
+    }, 20000);
+
+    view.webContents.on('did-finish-load', onInitialLoadFinished);
+    view.webContents.on('did-fail-load', onInitialLoadFailed);
 
     view.webContents.loadURL(DOUYIN_LOGIN_URL).catch((error) => {
-      destroyCurrentAccountView(mainWindow, activeAccountKey, view);
       finish({ ok: false, error: `纯净登录诊断浏览器打开失败：${error.message}` });
+      recordBrowserLifecycle('load-error-retained', {
+        accountKey: cleanAccountKey,
+        view,
+        reason: 'clean-login-load-rejected',
+      });
     });
     markLoginPageOpened(cleanAccountKey);
   });
 }
 
 function attachBrowserHandlers(mainWindow, view, account, options = {}) {
+  const accountKey = options.diagnostic
+    ? `clean-login:${accountKeyFor(account)}`
+    : accountKeyFor(account);
   if (process.env.DOUYIN_DEBUG) {
     view.webContents.session.webRequest.onCompleted({ urls: ['*://*.douyin.com/*'] }, (details) => {
       console.log('[browser-tabs] douyin request:', details.method, details.statusCode, details.url);
@@ -1044,42 +1563,93 @@ function attachBrowserHandlers(mainWindow, view, account, options = {}) {
     if (view.webContents.isDestroyed()) return;
     const url = String(view.webContents.getURL() || '');
     if (!url.includes('douyin.com') || url.startsWith('chrome-error://')) return;
-    setTimeout(() => {
-      if (view === activeView && !view.webContents.isDestroyed()) {
-        injectBridge(view);
-      }
-    }, 500);
+    scheduleBridgeRecovery(view, 500);
   };
 
+  view.webContents.on('did-start-navigation', (_event, _url, _isInPlace, isMainFrame) => {
+    if (!isMainFrame || view !== activeView) return;
+    stopActivePoller();
+    activeBridgeDiagnostic = {
+      status: 'reconnecting',
+      message: '页面跳转中，等待自动恢复任务连接',
+      url: view.webContents.getURL(),
+      updatedAt: new Date().toISOString(),
+    };
+  });
   view.webContents.on('did-finish-load', reinjectTaskBridge);
   view.webContents.on('did-navigate-in-page', reinjectTaskBridge);
   view.webContents.on('dom-ready', reinjectTaskBridge);
 
+  view.webContents.on('render-process-gone', (_event, details) => {
+    recordBrowserLifecycle('render-process-gone', {
+      accountKey,
+      view,
+      reason: `${details?.reason || 'unknown'}:${details?.exitCode ?? ''}`,
+    });
+  });
+
+  view.webContents.once('destroyed', () => {
+    recordBrowserLifecycle('web-contents-destroyed', {
+      accountKey,
+      view,
+      reason: 'electron-destroyed-event',
+    });
+    if (accountViews.get(accountKey) === view) accountViews.delete(accountKey);
+    if (activeView === view) {
+      activeView = null;
+      activeAccountKey = null;
+      activeViewVisible = false;
+      activeBrowserWidth = 0;
+      activeBrowserZoomFactor = 1;
+    }
+  });
+
 }
 
-function destroyCurrentAccountView(mainWindow, accountKey, view) {
+function destroyCurrentAccountView(mainWindow, accountKey, view, reason = 'unspecified') {
+  recordBrowserLifecycle('destroy', { accountKey, view, reason });
   if (accountViews.get(accountKey) === view) accountViews.delete(accountKey);
   stopLoginDetector(accountKey);
+  cancelBridgeRecovery(view);
   if (activeView === view) {
     stopActivePoller();
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.removeBrowserView(view);
     activeView = null;
     activeAccountKey = null;
     activeViewVisible = false;
+    activeBrowserWidth = 0;
+    activeBrowserZoomFactor = 1;
   }
   if (!view.webContents.isDestroyed()) view.webContents.destroy();
 }
 
 function hideAccountBrowser(mainWindow) {
   if (!activeView || !mainWindow || mainWindow.isDestroyed()) return { ok: true };
-  detachActiveView(mainWindow);
+  detachActiveView(mainWindow, 'user-hide');
   return { ok: true, hidden: true };
 }
 
 function closeAccountBrowser(mainWindow) {
   if (!activeView || !mainWindow || mainWindow.isDestroyed()) return { ok: true, closed: true };
-  destroyActiveView(mainWindow);
+  destroyActiveView(mainWindow, 'user-close-browser');
   return { ok: true, closed: true };
+}
+
+async function shutdown(mainWindow) {
+  const pendingBootstraps = [...backgroundBootstrapPromises.values()];
+  if (pendingBootstraps.length > 0) await Promise.allSettled(pendingBootstraps);
+
+  for (const [accountKey, view] of [...accountViews.entries()]) {
+    destroyCurrentAccountView(mainWindow, accountKey, view, 'application-shutdown');
+  }
+  if (activeView) destroyActiveView(mainWindow, 'application-shutdown-active-view');
+  for (const accountKey of [...loginDetectors.keys()]) stopLoginDetector(accountKey);
+  for (const scheduler of bridgeRecoverySchedulers.values()) scheduler.cancel();
+  bridgeRecoverySchedulers.clear();
+  bridgeInjectionPromises.clear();
+  backgroundBootstrapPromises.clear();
+  loginPageOpenedAt.clear();
+  return { ok: true };
 }
 
 function showAccountBrowser(mainWindow) {
@@ -1088,16 +1658,86 @@ function showAccountBrowser(mainWindow) {
   }
   mainWindow.setBrowserView(activeView);
   activeViewVisible = true;
+  recordBrowserLifecycle('show', { accountKey: activeAccountKey, view: activeView, reason: 'user-show' });
   resizeActiveBrowser(mainWindow);
+  scheduleBridgeRecovery(activeView, 100);
   return { ok: true };
+}
+
+async function reloadAccountBrowser(timeoutMs = 30000) {
+  if (!activeView || activeView.webContents.isDestroyed()) {
+    return { ok: false, error: '没有可刷新的账号浏览器，请先在账号页打开浏览器' };
+  }
+  const view = activeView;
+  const accountKey = activeAccountKey;
+  const url = view.webContents.getURL();
+  recordBrowserLifecycle('reload-start', { accountKey, view, reason: 'user-reload' });
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer = null;
+    const cleanup = () => {
+      view.webContents.removeListener('did-finish-load', onLoadFinished);
+      view.webContents.removeListener('did-fail-load', onLoadFailed);
+    };
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      cleanup();
+      resolve(result);
+    };
+    const onLoadFinished = () => {
+      recordBrowserLifecycle('reload-finished', { accountKey, view, reason: 'reload-succeeded' });
+      finish({ ok: true, url: getViewUrl(view) || url });
+    };
+    const onLoadFailed = (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      if (!isMainFrame || errorCode === -3) return;
+      const error = `浏览器刷新失败：${errorDescription || '页面加载失败'} (${errorCode}) ${validatedURL || ''}`.trim();
+      recordBrowserLifecycle('load-error-retained', {
+        accountKey,
+        view,
+        reason: 'reload-failed',
+      });
+      finish({ ok: false, error, url: getViewUrl(view) || url, retained: true });
+    };
+
+    view.webContents.on('did-finish-load', onLoadFinished);
+    view.webContents.on('did-fail-load', onLoadFailed);
+    timer = setTimeout(() => {
+      recordBrowserLifecycle('load-error-retained', {
+        accountKey,
+        view,
+        reason: 'reload-timeout',
+      });
+      finish({ ok: false, error: '浏览器刷新超时，已保留当前浏览器，请检查网络后重试', url, retained: true });
+    }, timeoutMs);
+
+    try {
+      view.webContents.reload();
+    } catch (error) {
+      recordBrowserLifecycle('load-error-retained', {
+        accountKey,
+        view,
+        reason: 'reload-threw',
+      });
+      finish({ ok: false, error: `浏览器刷新失败：${error.message || String(error)}`, url, retained: true });
+    }
+  });
 }
 
 module.exports = {
   buildLoginProbeScript,
+  clearAccountPartition,
   closeAccountBrowser,
+  closeAccountView,
   ensureBridgeInjected,
+  ensureBackgroundAccountView,
+  executeInAccountView,
   fetchWithActiveBrowserSession: fetchWithActiveBrowserSessionWithFallback,
   forceStartBridge,
+  getAccountViewState,
+  getAccountSession,
   getBridgeDiagnostic,
   getLoginCooldown,
   getLoginCookieResult,
@@ -1107,8 +1747,15 @@ module.exports = {
   isLoggedInProbeResult,
   openAccountBrowser,
   openCleanLoginBrowser,
+  readAccountDeviceId,
+  readAccountUserId,
+  releaseBackgroundAccountView,
+  reloadAccountBrowser,
   resetAccountBrowserData,
   resizeActiveBrowser,
   runBridgeSelfTest,
   showAccountBrowser,
+  shutdown,
+  setBrowserDockMode,
+  setLifecycleLogger,
 };

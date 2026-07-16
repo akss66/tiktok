@@ -7,3 +7,7 @@ contextBridge.exposeInMainWorld('__electronBridgeFetch', {
   request: (method, url, headers, body) =>
     ipcRenderer.invoke('bridge:fetch', { method, url, headers, body }),
 });
+
+contextBridge.exposeInMainWorld('__electronBridgeSession', {
+  getDmAuth: () => ipcRenderer.invoke('bridge:dm-auth'),
+});

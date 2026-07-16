@@ -84,9 +84,40 @@ export async function createBatchJob(input) {
   return requireBridge().createBatchJob(input);
 }
 
-export async function runBatchJob(id) {
-  await ensureBrowserBridge();
+export async function createCommentSyncJob(input) {
+  return requireBridge().createCommentSyncJob(input);
+}
+
+export async function runBatchJob(id, options = {}) {
+  if (options.requiresBrowser !== false) {
+    if (options.accountId) await ensureAccountBrowserBridge(options.accountId);
+    else await ensureBrowserBridge();
+  }
   return requireBridge().runBatchJob(id);
+}
+
+export async function pauseBatchJob(id) {
+  return requireBridge().pauseBatchJob(id);
+}
+
+export async function cancelBatchJob(id) {
+  return requireBridge().cancelBatchJob(id);
+}
+
+export async function resumeBatchJob(id, options = {}) {
+  if (options.requiresBrowser !== false) {
+    if (options.accountId) await ensureAccountBrowserBridge(options.accountId);
+    else await ensureBrowserBridge();
+  }
+  return requireBridge().resumeBatchJob(id);
+}
+
+export async function retryFailedBatchItems(id, options = {}) {
+  if (options.requiresBrowser !== false) {
+    if (options.accountId) await ensureAccountBrowserBridge(options.accountId);
+    else await ensureBrowserBridge();
+  }
+  return requireBridge().retryFailedBatchItems(id);
 }
 
 export async function listBatchItems(id) {
@@ -97,13 +128,19 @@ export async function listVideos(filters) {
   return requireBridge().listVideos(filters);
 }
 
+export async function resolveExternalVideo(input) {
+  if (input?.accountId) await ensureAccountBrowserBridge(input.accountId);
+  return requireBridge().resolveExternalVideo(input);
+}
+
 export async function syncMyVideos(input) {
   await ensureBrowserBridge();
   return requireBridge().syncMyVideos(input);
 }
 
 export async function syncComments(awemeId, input) {
-  await ensureBrowserBridge();
+  if (input?.accountId) await ensureAccountBrowserBridge(input.accountId);
+  else await ensureBrowserBridge();
   return requireBridge().syncComments(awemeId, input);
 }
 
@@ -132,8 +169,96 @@ export async function publishReplyDraft(id) {
   return requireBridge().publishReplyDraft(id);
 }
 
+export async function listDmLeads(filters) {
+  return requireBridge().listDmLeads(filters);
+}
+
+export async function listDmLeadSources(id) {
+  return requireBridge().listDmLeadSources(id);
+}
+
+export async function syncDmLeads(input) {
+  return requireBridge().syncDmLeads(input);
+}
+
+export async function analyzeDmLeads(input) {
+  return requireBridge().analyzeDmLeads(input);
+}
+
+export async function updateDmLead(id, patch) {
+  return requireBridge().updateDmLead(id, patch);
+}
+
+export async function createDmSendJob(input) {
+  return requireBridge().createDmSendJob(input);
+}
+
+export async function listDmMonitorStates() {
+  return requireBridge().listDmMonitorStates();
+}
+
+export async function updateDmMonitorState(accountId, patch) {
+  return requireBridge().updateDmMonitorState(accountId, {
+    enabled: patch?.enabled === undefined ? null : patch.enabled,
+    settingSource: patch?.settingSource,
+    replyModeOverride: patch?.replyModeOverride === undefined ? null : patch.replyModeOverride,
+  });
+}
+
+export async function listDmConversations(filters) {
+  return requireBridge().listDmConversations(filters);
+}
+
+export async function getDmConversation(accountId, conversationId) {
+  return requireBridge().getDmConversation(accountId, conversationId);
+}
+
+export async function deleteDmConversation(accountId, conversationId) {
+  return requireBridge().deleteDmConversation(accountId, conversationId);
+}
+
+export async function listDmMessages(accountId, conversationId, filters) {
+  return requireBridge().listDmMessages(accountId, conversationId, filters);
+}
+
+export async function getDmConversationAnalysis(accountId, conversationId) {
+  return requireBridge().getDmConversationAnalysis(accountId, conversationId);
+}
+
+export async function reanalyzeDmConversation(accountId, conversationId) {
+  return requireBridge().reanalyzeDmConversation(accountId, conversationId);
+}
+
+export async function markDmConversationRead(accountId, conversationId) {
+  return requireBridge().markDmConversationRead(accountId, conversationId);
+}
+
+export async function updateDmConversation(accountId, conversationId, patch) {
+  return requireBridge().updateDmConversation(accountId, conversationId, patch);
+}
+
+export async function reauthorizeDmAutoReply(accountId, conversationId) {
+  return requireBridge().reauthorizeDmAutoReply(accountId, conversationId);
+}
+
+export async function sendDmReply(accountId, conversationId, input) {
+  return requireBridge().sendDmReply(accountId, conversationId, input);
+}
+
 export async function listKnowledge() {
   return requireBridge().listKnowledge();
+}
+
+export async function queryKnowledge(filters) {
+  return requireBridge().queryKnowledge(filters);
+}
+
+export async function checkKnowledgeDuplicate(content) {
+  return requireBridge().checkKnowledgeDuplicate(content);
+}
+
+export async function bulkKnowledge(input) {
+  return requireBridge().bulkKnowledge(input);
 }
 
 export async function createKnowledge(input) {
@@ -158,6 +283,26 @@ export async function getLlmSettings() {
 
 export async function updateLlmSettings(patch) {
   return requireBridge().updateLlmSettings(patch);
+}
+
+export async function testLlmSettings(patch) {
+  return requireBridge().testLlmSettings(patch);
+}
+
+export async function getReplySettings() {
+  return requireBridge().getReplySettings();
+}
+
+export async function getDmSettings() {
+  return requireBridge().getDmSettings();
+}
+
+export async function updateDmSettings(patch) {
+  return requireBridge().updateDmSettings(patch);
+}
+
+export async function updateReplySettings(patch) {
+  return requireBridge().updateReplySettings(patch);
 }
 
 export async function getAppInfo() {
@@ -202,6 +347,14 @@ export async function hideAccountBrowser() {
 
 export async function showAccountBrowser() {
   return requireBridge().showAccountBrowser();
+}
+
+export async function reloadAccountBrowser() {
+  return requireBridge().reloadAccountBrowser();
+}
+
+export async function setBrowserDockMode(mode) {
+  return requireBridge().setBrowserDockMode(mode);
 }
 
 export async function ensureBrowserBridge() {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { listEvents } from '../api.js';
 import { PageHeader } from './PageHeader.jsx';
+import { SelectMenu } from './SelectMenu.jsx';
 
 function formatMetadata(metadata) {
   if (!metadata || !Object.keys(metadata).length) return '-';
@@ -46,7 +47,7 @@ export function LogsPage() {
       <div className="panel-section logs-toolbar">
         <label>
           <span>日志数量</span>
-          <select
+          <SelectMenu
             className="limit-select"
             value={limit}
             onChange={(event) => {
@@ -59,7 +60,7 @@ export function LogsPage() {
             <option value="50">50 条</option>
             <option value="100">100 条</option>
             <option value="200">200 条</option>
-          </select>
+          </SelectMenu>
         </label>
       </div>
 

@@ -1,5 +1,14 @@
 node_modules/
 desktop/renderer/dist/
+desktop/dist/
+desktop/backend/
+desktop/installer*/
+desktop/release/
+desktop/.runtime/
+desktop/.dev-logs/
+desktop/*.log
+storage-package-smoke/
+.superpowers/
 .tools/
 .idea/
 logs/

@@ -37,7 +37,31 @@
       if(cl.length>0)return{conversation_id:cl[0].conversation_id,
         conversation_short_id:String(cl[0].conversation_short_id),ticket:cl[0].ticket};
     }
-    throw new Error('[createConversation] 未找到会话: '+JSON.stringify(result).substring(0,200));
+    var safeResult=JSON.stringify(result,function(key,val){return typeof val==='bigint'?val.toString():val;});
+    throw new Error('[createConversation] 未找到会话: '+safeResult.substring(0,500));
+  },
+  getConversationInfo: async function(conversationId,conversationShortId){
+    var keys=_DM_HELPERS.getDMKeys();
+    var bodyBytes=_DM_PROTO.encodeGetConversationInfoListBody({
+      conversation_id:String(conversationId||''),
+      conversation_short_id:String(conversationShortId||'0'),
+      conversation_type:1
+    });
+    var requestBytes=_DM_PROTO.encodeRequest({cmd:610,token:keys.ticket,ts_sign:keys.ts_sign,
+      sdk_cert:btoa(keys.client_cert||''),reuqest_sign:'',bodyBytes:bodyBytes});
+    var resp=await fetch('https://imapi.douyin.com/v2/conversation/get_info_list',{
+      method:'POST',headers:{'Content-Type':'application/x-protobuf','Accept':'application/x-protobuf'},
+      body:_DM_PROTO.bytesToArray(requestBytes),credentials:'include'});
+    if(!resp.ok){var t=await resp.text();throw new Error('[getConversationInfo] HTTP '+resp.status+': '+t.substring(0,200));}
+    var respBytes=new Uint8Array(await resp.arrayBuffer());
+    var result=_DM_PROTO.decodeResponse(respBytes);
+    if(result.body&&result.body.get_conversation_info_list_v2_response_body){
+      var cl=result.body.get_conversation_info_list_v2_response_body.conversation_info_list||[];
+      if(cl.length>0&&cl[0].ticket)return{conversation_id:cl[0].conversation_id,
+        conversation_short_id:String(cl[0].conversation_short_id),ticket:cl[0].ticket};
+    }
+    var safeResult=JSON.stringify(result,function(key,val){return typeof val==='bigint'?val.toString():val;});
+    throw new Error('[getConversationInfo] 未找到会话: '+safeResult.substring(0,500));
   },
   sendDM: async function(convId,text){
     var parts=convId.split('|');
