@@ -303,7 +303,7 @@ describe('desktop DM notifications', () => {
   it('suppresses notifications during ordinary quiet hours without changing the message', () => {
     const message = incomingMessage();
     const harness = createNotificationHarness({
-      now: () => new Date('2026-07-13T10:30:00+08:00'),
+      now: () => new Date(2026, 6, 13, 10, 30),
     });
 
     expect(harness.notifier.notify(message, enabledSettings({
@@ -316,13 +316,13 @@ describe('desktop DM notifications', () => {
 
   it('suppresses notifications during quiet hours that cross midnight', () => {
     const lateHarness = createNotificationHarness({
-      now: () => new Date('2026-07-13T23:30:00+08:00'),
+      now: () => new Date(2026, 6, 13, 23, 30),
     });
     const earlyHarness = createNotificationHarness({
-      now: () => new Date('2026-07-14T06:30:00+08:00'),
+      now: () => new Date(2026, 6, 14, 6, 30),
     });
     const daytimeHarness = createNotificationHarness({
-      now: () => new Date('2026-07-14T08:00:00+08:00'),
+      now: () => new Date(2026, 6, 14, 8, 0),
     });
     const settings = enabledSettings({ quiet_hours_start: '22:00', quiet_hours_end: '07:00' });
 

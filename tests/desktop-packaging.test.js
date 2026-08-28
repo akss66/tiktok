@@ -55,7 +55,9 @@ describe('desktop packaging', () => {
       has_more: false,
     };
 
-    expect(require.resolve('../desktop/electron/dm-history')).toContain('desktop\\electron\\dm-history.js');
+    expect(require.resolve('../desktop/electron/dm-history').split(path.sep).join('/')).toContain(
+      'desktop/electron/dm-history.js',
+    );
     expect(electronHistory.normalizeHistoryPage(sample)).toEqual(backendHistory.normalizeHistoryPage(sample));
     expect(monitorSource).toContain("require('./dm-history')");
     expect(monitorSource).not.toContain("require('../../lib/desktop/dm-history')");
