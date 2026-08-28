@@ -55,7 +55,7 @@ describe('sanitizeComment (via LLM module)', () => {
 describe('LLMClient constructor', () => {
   it('默认值', () => {
     const c = new LLMClient();
-    expect(c.model).toBe('gpt-4o-mini');
+    expect(c.model).toBe('deepseek-v4-flash');
     expect(c.maxRetries).toBe(3);
   });
 
